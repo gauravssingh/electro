@@ -7,9 +7,11 @@ gracefully from expired sessions and transient network outages.
 
 from typing import Optional, Dict, Any, Tuple
 from datetime import datetime, timezone, timedelta
+from pathlib import Path
 import logging
 import threading
 import time
+import fcntl
 
 from elnet.client import ELNetClient
 from elnet.schemas import ErrorCategory, ElnetError
@@ -41,6 +43,8 @@ class PollingService:
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
         self._thread: Optional[threading.Thread] = None
+        self._lock_file: Optional[Any] = None
+        self._lock_path = Path(repository.db_path).parent / ".electro.poller.lock"
 
         # State tracking
         self.status = "offline"  # connected | stale | authentication_required | offline
@@ -66,9 +70,16 @@ class PollingService:
             except Exception:
                 pass
 
+        max_fresh_age = max(self.poll_interval_seconds * 2.5, 45.0)
+        is_stale = (
+            self.status in ("stale", "offline", "authentication_required")
+            or (age_seconds is not None and age_seconds > max_fresh_age)
+            or (self.last_success_at_utc is None)
+        )
+
         return {
             "status": self.status,
-            "stale": self.status in ("stale", "offline", "authentication_required"),
+            "stale": is_stale,
             "last_attempt_at": self.last_attempt_at_utc,
             "last_success_at": self.last_success_at_utc,
             "last_duration_ms": self.last_duration_ms,
@@ -249,21 +260,62 @@ class PollingService:
             self._lock.release()
 
     def start(self) -> None:
-        """Start the background polling worker thread."""
+        """Start the background polling worker thread.
+        
+        Uses an advisory process lock so that in multi-worker WSGI environments,
+        only one worker process ever launches the periodic polling thread.
+        """
         if self._thread is not None and self._thread.is_alive():
             return
+
+        # Attempt to acquire advisory process-level file lock
+        try:
+            f = open(self._lock_path, "a+")
+            fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
+            self._lock_file = f
+        except (BlockingIOError, OSError):
+            logger.info("Another process holds the poller lock; running in web-only mode without poller worker")
+            return
+
         self._stop_event.clear()
         self._thread = threading.Thread(target=self._run_loop, name="ELNetPoller", daemon=True)
         self._thread.start()
         logger.info("Background polling worker started (cadence: %ds)", self.poll_interval_seconds)
 
-    def stop(self) -> None:
-        """Signal worker thread to terminate cleanly and wait for it."""
+    def stop(self, timeout: Optional[float] = None) -> bool:
+        """Signal worker thread to terminate cleanly and wait for it.
+
+        Waits up to the client request timeout + buffer to ensure in-flight
+        HTTP requests finish without leaving orphan threads.
+        """
         self._stop_event.set()
-        if self._thread is not None and self._thread.is_alive():
-            self._thread.join(timeout=3.0)
+
+        # Release process-level lock file
+        if self._lock_file is not None:
+            try:
+                fcntl.flock(self._lock_file, fcntl.LOCK_UN)
+                self._lock_file.close()
+            except Exception:
+                pass
+            self._lock_file = None
+
+        if self._thread is None:
+            return True
+
+        if not self._thread.is_alive():
             self._thread = None
-        logger.info("Background polling worker stopped")
+            return True
+
+        wait_timeout = timeout if timeout is not None else float(getattr(self.client, "timeout", 15) + 2.0)
+        self._thread.join(timeout=wait_timeout)
+
+        if self._thread.is_alive():
+            logger.warning("Polling worker thread did not stop within %.1fs timeout", wait_timeout)
+            return False
+
+        self._thread = None
+        logger.info("Background polling worker stopped cleanly")
+        return True
 
     def _run_loop(self) -> None:
         """Background worker loop using a fixed monotonic cadence.

@@ -14,6 +14,7 @@ MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 @contextmanager
 def get_db_connection(db_path: str) -> Generator[sqlite3.Connection, None, None]:
     """Provide a thread-safe SQLite connection with WAL mode and row factory."""
+    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
     conn = sqlite3.connect(db_path, timeout=10.0, check_same_thread=False)
     conn.row_factory = sqlite3.Row
     try:
