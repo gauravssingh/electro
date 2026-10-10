@@ -1,0 +1,281 @@
+{% extends "base.html" %}
+
+{% block content %}
+<div class="space-y-6">
+
+  <!-- Status / Error Notification Banner (hidden by default) -->
+  <div id="alert-banner" class="hidden rounded-xl border p-4 text-sm flex items-start space-x-3 transition">
+    <div id="alert-icon" class="text-lg">⚠️</div>
+    <div class="flex-1">
+      <div id="alert-title" class="font-semibold">Notice</div>
+      <div id="alert-body" class="text-xs mt-0.5 text-slate-300"></div>
+    </div>
+  </div>
+
+  <!-- Prominent Active Power Source Indicator Card -->
+  <div id="power-source-hero" class="rounded-xl border p-5 shadow-sm flex flex-wrap items-center justify-between gap-4 transition bg-slate-800/80 border-slate-700">
+    <div class="flex items-center space-x-4">
+      <div id="source-badge-icon" class="h-14 w-14 rounded-2xl flex items-center justify-center text-3xl bg-slate-700/60 text-slate-400 border border-slate-600/50 shadow-inner">
+        ⚡
+      </div>
+      <div>
+        <div class="flex items-center gap-2">
+          <span class="text-xs font-bold uppercase tracking-wider text-slate-400">Current Power Source</span>
+          <span id="source-subtag" class="text-[10px] px-2 py-0.5 rounded-full font-mono bg-slate-800 text-slate-400 border border-slate-700">EBDGStatus: --</span>
+        </div>
+        <div id="source-title" class="text-2xl sm:text-3xl font-extrabold tracking-tight text-white mt-1">
+          Loading...
+        </div>
+        <p id="source-description" class="text-xs text-slate-400 mt-1">
+          Verified from meter telemetry (read-only)
+        </p>
+      </div>
+    </div>
+
+    <!-- Independent Source & Relay Badges -->
+    <div class="flex flex-wrap items-center gap-3">
+      <!-- Power Source Pill -->
+      <div id="source-pill" class="px-4 py-2 rounded-xl text-xs font-bold tracking-wide uppercase bg-slate-700 text-slate-300 border border-slate-600 flex items-center gap-2">
+        <span id="source-pill-dot" class="h-2 w-2 rounded-full bg-slate-400"></span>
+        <span id="source-pill-text">--</span>
+      </div>
+
+      <!-- Independent Relay State Badge -->
+      <div class="px-4 py-2 rounded-xl bg-slate-900/90 border border-slate-700/80 text-xs flex items-center space-x-2">
+        <span class="text-slate-400 font-medium">Relay State:</span>
+        <span id="relay-pill" class="font-bold text-slate-300 font-mono">--</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Primary Metric Cards -->
+  <div class="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-4 gap-4">
+    <!-- Meter Balance Card -->
+    <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-5 shadow-sm">
+      <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider">
+        <span>Meter Balance</span>
+        <span class="text-emerald-400 text-base">💰</span>
+      </div>
+      <div class="mt-3 flex items-baseline">
+        <span class="text-slate-400 text-lg mr-1">₹</span>
+        <span id="metric-balance" class="text-3xl font-bold tracking-tight text-white">--</span>
+      </div>
+      <p class="mt-2 text-xs text-slate-400" id="metric-balance-subtitle">Current prepaid credit</p>
+    </div>
+
+    <!-- Today Energy -->
+    <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-5 shadow-sm">
+      <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider">
+        <span>Today's Reported Energy</span>
+        <span class="text-cyan-400 text-base">⚡</span>
+      </div>
+      <div class="mt-3 flex items-baseline">
+        <span id="metric-kwh-today" class="text-3xl font-bold tracking-tight text-white">--</span>
+        <span class="text-slate-400 text-sm ml-1.5 font-medium">kWh</span>
+      </div>
+      <p class="mt-2 text-xs text-slate-400">Cumulative reported today (updates at meter resolution)</p>
+    </div>
+
+    <!-- Month Energy -->
+    <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-5 shadow-sm">
+      <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider">
+        <span>Month Energy</span>
+        <span class="text-blue-400 text-base">📅</span>
+      </div>
+      <div class="mt-3 flex items-baseline">
+        <span id="metric-kwh-month" class="text-3xl font-bold tracking-tight text-white">--</span>
+        <span class="text-slate-400 text-sm ml-1.5 font-medium">kWh</span>
+      </div>
+      <p class="mt-2 text-xs text-slate-400">Month-to-date imported</p>
+    </div>
+
+    <!-- Independent Relay Status Card -->
+    <div class="bg-slate-800/60 border border-slate-700/60 rounded-xl p-5 shadow-sm">
+      <div class="flex items-center justify-between text-slate-400 text-xs font-medium uppercase tracking-wider">
+        <span>Relay Status</span>
+        <span class="text-amber-400 text-base">🔌</span>
+      </div>
+      <div class="mt-3 flex items-center">
+        <span id="metric-relay" class="inline-flex items-center px-3 py-1 rounded-md text-sm font-semibold bg-slate-700 text-slate-300">
+          --
+        </span>
+      </div>
+      <p class="mt-2 text-xs text-slate-400">Independently reported RelStatus</p>
+    </div>
+  </div>
+
+  <!-- Detailed Usage & Source Flags -->
+  <div class="grid grid-cols-1 lg:grid-cols-3 gap-6">
+    <!-- Today's Charges -->
+    <div class="bg-slate-800/40 border border-slate-700/50 rounded-xl p-5">
+      <h3 class="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-4">Today's Estimated Charges</h3>
+      <div class="space-y-3 text-sm">
+        <div class="flex justify-between items-center py-1 border-b border-slate-700/40">
+          <span class="text-slate-400">Grid / EB</span>
+          <span id="charge-today-eb" class="font-mono text-slate-200">--</span>
+        </div>
+        <div class="flex justify-between items-center py-1 border-b border-slate-700/40">
+          <span class="text-slate-400">Generator / DG</span>
+          <span id="charge-today-dg" class="font-mono text-slate-200">--</span>
+        </div>
+        <div class="flex justify-between items-center py-1 border-b border-slate-700/40">
+          <span class="text-slate-400">Solar</span>
+          <span id="charge-today-solar" class="font-mono text-slate-200">--</span>
+        </div>
+        <div class="flex justify-between items-center py-1">
+          <span class="text-slate-400">Fixed Charges</span>
+          <span id="charge-today-fixed" class="font-mono text-slate-200">--</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Month's Charges -->
+    <div class="bg-slate-800/40 border border-slate-700/50 rounded-xl p-5">
+      <h3 class="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-4">Month-to-Date Charges</h3>
+      <div class="space-y-3 text-sm">
+        <div class="flex justify-between items-center py-1 border-b border-slate-700/40">
+          <span class="text-slate-400">Grid / EB</span>
+          <span id="charge-month-eb" class="font-mono text-slate-200">--</span>
+        </div>
+        <div class="flex justify-between items-center py-1 border-b border-slate-700/40">
+          <span class="text-slate-400">Generator / DG</span>
+          <span id="charge-month-dg" class="font-mono text-slate-200">--</span>
+        </div>
+        <div class="flex justify-between items-center py-1 border-b border-slate-700/40">
+          <span class="text-slate-400">Solar</span>
+          <span id="charge-month-solar" class="font-mono text-slate-200">--</span>
+        </div>
+        <div class="flex justify-between items-center py-1">
+          <span class="text-slate-400">Fixed Charges</span>
+          <span id="charge-month-fixed" class="font-mono text-slate-200">--</span>
+        </div>
+      </div>
+    </div>
+
+    <!-- Enabled Sources / Flags -->
+    <div class="bg-slate-800/40 border border-slate-700/50 rounded-xl p-5 flex flex-col justify-between">
+      <div>
+        <h3 class="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-4">Configured Sources</h3>
+        <div class="grid grid-cols-2 gap-2 text-xs">
+          <div id="flag-eb" class="p-2.5 rounded-lg border border-slate-700 bg-slate-800/80 flex items-center justify-between">
+            <span>Grid (EB)</span>
+            <span class="flag-val font-semibold">--</span>
+          </div>
+          <div id="flag-dg" class="p-2.5 rounded-lg border border-slate-700 bg-slate-800/80 flex items-center justify-between">
+            <span>Generator (DG)</span>
+            <span class="flag-val font-semibold">--</span>
+          </div>
+          <div id="flag-solar" class="p-2.5 rounded-lg border border-slate-700 bg-slate-800/80 flex items-center justify-between">
+            <span>Solar</span>
+            <span class="flag-val font-semibold">--</span>
+          </div>
+          <div id="flag-fixed" class="p-2.5 rounded-lg border border-slate-700 bg-slate-800/80 flex items-center justify-between">
+            <span>Fixed Charge</span>
+            <span class="flag-val font-semibold">--</span>
+          </div>
+        </div>
+      </div>
+      <div class="mt-4 pt-3 border-t border-slate-700/50 text-xs text-slate-400">
+        Meter ID: <span id="meter-id-label" class="font-mono text-slate-200">--</span>
+      </div>
+    </div>
+  </div>
+
+  <!-- Historical Trend Chart & Source Transitions Section -->
+  <div class="bg-slate-800/50 border border-slate-700/60 rounded-xl p-6">
+    <div class="flex flex-wrap items-center justify-between gap-4 mb-4">
+      <div>
+        <h3 class="text-base font-semibold text-white">Historical Trends & Source History</h3>
+        <p class="text-xs text-slate-400">Balance reflects live deductions · Cyan series represents cumulative meter reading (not interval delta)</p>
+      </div>
+
+      <!-- Time Range Selector -->
+      <div class="inline-flex rounded-lg bg-slate-900 p-1 border border-slate-700 text-xs font-medium">
+        <button type="button" class="range-btn px-3 py-1.5 rounded-md text-white bg-emerald-600 transition" data-range="24h">24 Hours</button>
+        <button type="button" class="range-btn px-3 py-1.5 rounded-md text-slate-400 hover:text-white transition" data-range="7d">7 Days</button>
+        <button type="button" class="range-btn px-3 py-1.5 rounded-md text-slate-400 hover:text-white transition" data-range="30d">30 Days</button>
+      </div>
+    </div>
+
+    <!-- Chart Container -->
+    <div class="relative h-72 w-full">
+      <canvas id="historyChart"></canvas>
+      <div id="chart-empty-state" class="hidden absolute inset-0 flex flex-col items-center justify-center bg-slate-900/60 rounded-lg text-center p-4">
+        <span class="text-2xl mb-2">📊</span>
+        <p class="text-sm font-medium text-slate-300">Insufficient historical data points</p>
+        <p class="text-xs text-slate-500 mt-1">History accumulates periodically as the local poller runs snapshots.</p>
+      </div>
+    </div>
+
+    <!-- Compact DG Usage & Source Analytics Panel -->
+    <div class="mt-6 pt-5 border-t border-slate-700/50">
+      <div class="flex items-center justify-between mb-3">
+        <h4 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+          <span>📊</span> Source Analytics & DG Usage (<span id="analytics-range-label">24h</span>)
+        </h4>
+        <span class="text-[10px] text-slate-500 font-mono">Detection resolution: ±<span id="analytics-resolution">60</span>s polling</span>
+      </div>
+      <div class="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
+        <div class="p-3 rounded-lg bg-slate-900/80 border border-slate-800">
+          <div class="text-slate-400 text-[11px]">Observed on DG</div>
+          <div id="analytics-dg-time" class="text-lg font-bold text-amber-400 mt-1">0m</div>
+          <div id="analytics-dg-sub" class="text-[10px] text-slate-500 mt-0.5">0 snapshots</div>
+        </div>
+        <div class="p-3 rounded-lg bg-slate-900/80 border border-slate-800">
+          <div class="text-slate-400 text-[11px]">Observed on Grid</div>
+          <div id="analytics-grid-time" class="text-lg font-bold text-emerald-400 mt-1">--</div>
+          <div id="analytics-grid-sub" class="text-[10px] text-slate-500 mt-0.5">-- snapshots</div>
+        </div>
+        <div class="p-3 rounded-lg bg-slate-900/80 border border-slate-800">
+          <div class="text-slate-400 text-[11px]">Source Transitions</div>
+          <div id="analytics-transitions" class="text-lg font-bold text-white mt-1">0</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">Grid ↔ DG switches</div>
+        </div>
+        <div class="p-3 rounded-lg bg-slate-900/80 border border-slate-800">
+          <div class="text-slate-400 text-[11px]">Grid Availability</div>
+          <div id="analytics-grid-percent" class="text-lg font-bold text-cyan-400 mt-1">100%</div>
+          <div class="text-[10px] text-slate-500 mt-0.5">Time on Main Source</div>
+        </div>
+      </div>
+    </div>
+
+    <!-- Power Source Transitions Timeline -->
+    <div class="mt-5 pt-4 border-t border-slate-800">
+      <div class="flex items-center justify-between mb-3">
+        <h4 class="text-xs font-bold uppercase tracking-wider text-slate-300 flex items-center gap-1.5">
+          <span>🔄</span> Recorded Source Transitions
+        </h4>
+        <span id="transitions-count-badge" class="text-[11px] font-mono text-slate-400">0 transitions</span>
+      </div>
+      <div id="transitions-container" class="space-y-2 text-xs">
+        <p class="text-slate-500 italic py-1">No source transitions recorded during this timeframe.</p>
+      </div>
+    </div>
+  </div>
+
+  <!-- Recent Readings Table -->
+  <div class="bg-slate-800/40 border border-slate-700/50 rounded-xl p-5">
+    <h3 class="text-sm font-semibold text-slate-200 uppercase tracking-wider mb-3">Recent Recorded Snapshots</h3>
+    <div class="overflow-x-auto">
+      <table class="w-full text-left text-xs text-slate-300">
+        <thead class="bg-slate-800/80 text-slate-400 uppercase font-semibold">
+          <tr>
+            <th class="px-3 py-2.5 rounded-l-md">Timestamp (Local)</th>
+            <th class="px-3 py-2.5">Power Source</th>
+            <th class="px-3 py-2.5">Balance</th>
+            <th class="px-3 py-2.5">Today kWh</th>
+            <th class="px-3 py-2.5">Month kWh</th>
+            <th class="px-3 py-2.5 rounded-r-md">Relay</th>
+          </tr>
+        </thead>
+        <tbody id="recent-readings-tbody" class="divide-y divide-slate-800/60 font-mono">
+          <tr>
+            <td colspan="6" class="px-3 py-4 text-center text-slate-500 font-sans">No snapshots recorded yet.</td>
+          </tr>
+        </tbody>
+      </table>
+    </div>
+  </div>
+
+</div>
+{% endblock %}

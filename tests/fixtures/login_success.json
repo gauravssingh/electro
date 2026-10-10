@@ -1,0 +1,12 @@
+{
+  "Status": "Success",
+  "Message": "Data Available",
+  "Data": {
+    "RefreshToken": "",
+    "AuthToken": "synthetic_test_token_abcdef1234567890",
+    "UserName": "synthetic_user",
+    "FlatId": 1042,
+    "UserID": 999,
+    "Access": "User"
+  }
+}

@@ -1,0 +1,13 @@
+/* Custom enhancements on top of Tailwind */
+body {
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+}
+
+.flag-badge-enabled {
+  color: #34d399; /* emerald-400 */
+}
+
+.flag-badge-disabled {
+  color: #64748b; /* slate-500 */
+}

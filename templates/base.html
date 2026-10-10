@@ -1,0 +1,63 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>{% block title %}Electro — Meter Dashboard{% endblock %}</title>
+  <!-- Tailwind CSS via CDN -->
+  <script src="https://cdn.tailwindcss.com"></script>
+  <!-- Chart.js via CDN -->
+  <script src="https://cdn.jsdelivr.net/npm/chart.js"></script>
+  <link rel="stylesheet" href="{{ url_for('static', filename='css/style.css') }}">
+</head>
+<body class="bg-slate-900 text-slate-100 min-h-screen flex flex-col font-sans">
+  <!-- Top Navigation / Status Header -->
+  <header class="border-b border-slate-800 bg-slate-900/90 backdrop-blur sticky top-0 z-50">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8 py-3 flex flex-wrap items-center justify-between gap-4">
+      <div class="flex items-center space-x-3">
+        <div class="h-8 w-8 rounded-lg bg-emerald-500/20 text-emerald-400 flex items-center justify-center font-bold text-lg border border-emerald-500/30">
+          ⚡
+        </div>
+        <div>
+          <h1 class="text-lg font-semibold tracking-tight text-white">Electro</h1>
+          <p class="text-xs text-slate-400">Personal Meter Dashboard</p>
+        </div>
+      </div>
+
+      <!-- Status Indicator & Manual Refresh -->
+      <div class="flex items-center space-x-3">
+        <div class="flex items-center px-3 py-1.5 rounded-full bg-slate-800 border border-slate-700 text-xs">
+          <span id="connection-dot" class="h-2 w-2 rounded-full bg-slate-500 mr-2 animate-pulse"></span>
+          <span id="connection-text" class="text-slate-300 font-medium">Checking status...</span>
+        </div>
+
+        <button id="refresh-btn" class="inline-flex items-center px-3.5 py-1.5 text-xs font-medium rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white transition focus:outline-none focus:ring-2 focus:ring-emerald-500 disabled:opacity-50 disabled:cursor-not-allowed">
+          <svg id="refresh-icon" class="w-3.5 h-3.5 mr-1.5" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 4v5h.582m15.356 2A8.001 8.001 0 004.582 9m0 0H9m11 11v-5h-.581m0 0a8.003 8.003 0 01-15.357-2m15.357 2H15"></path>
+          </svg>
+          <span id="refresh-label">Refresh Now</span>
+        </button>
+      </div>
+    </div>
+  </header>
+
+  <!-- Main Content Container -->
+  <main class="flex-1 max-w-7xl w-full mx-auto px-4 sm:px-6 lg:px-8 py-6">
+    {% block content %}{% endblock %}
+  </main>
+
+  <!-- Footer with Disclaimer & Safety Notice -->
+  <footer class="border-t border-slate-800 bg-slate-950 py-4 mt-auto text-center text-xs text-slate-500">
+    <div class="max-w-7xl mx-auto px-4 sm:px-6 lg:px-8">
+      <p>
+        Unofficial personal dashboard for authorized single-account use. Not affiliated with or endorsed by ELMeasure.
+      </p>
+      <p class="mt-1 text-slate-600">
+        Upstream communication uses unencrypted HTTP on port 8091. Bound strictly to local loopback (<code class="text-slate-500">127.0.0.1</code>).
+      </p>
+    </div>
+  </footer>
+
+  <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
+</body>
+</html>
