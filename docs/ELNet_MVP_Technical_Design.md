@@ -55,6 +55,8 @@ by default. It must not mutate upstream meter/account/payment state.
     reset/rollover logic.
 -   AI analysis or anomaly detection in MVP.
 
+> **Product Roadmap:** For planned future product direction, UI enhancements, and phased analytical capabilities beyond the initial MVP, see the canonical [Product Roadmap](ROADMAP.md).
+
 ## 3. Known upstream contract
 
 Use the separate **ELNet API Discovery Reference** as the endpoint

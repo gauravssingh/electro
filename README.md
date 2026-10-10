@@ -201,6 +201,21 @@ For complete reverse-engineering details, see [docs/ELNet_API_Discovery_Referenc
 
 ---
 
+## 🗺️ Product Roadmap & Future Enhancements
+
+Electro's current version focuses on durable periodic telemetry capture, verified source decoding (`EBDGStatus`), and honest local persistence. 
+
+Future product phases, UX improvements, and analytical capabilities are documented in the canonical [Product Roadmap](docs/ROADMAP.md) (or [ROADMAP.md](ROADMAP.md)):
+
+- **Phase 1 — Trustworthy Dashboard**: Overview redesign around reported power source, capture freshness, and persisted Grid/DG transition timelines with visible missing-data gaps.
+- **Phase 2 — Energy & Supply Analytics**: Daily consumption delta calculations, interval duration estimates, and CSV export.
+- **Phase 3 — Balance Intelligence**: Depletion rate estimation, threshold forecasting, and data coverage indicators.
+- **Phase 4 — Alerts & Operational Polish**: Local macOS notifications for stale capture or low balance, automated database backups, and settings configuration.
+
+> **Note:** The roadmap outlines proposed future product direction and does not imply that planned features are currently implemented. Refer to [docs/ROADMAP.md](docs/ROADMAP.md) for detailed phase criteria, calculation data contracts, and design principles.
+
+---
+
 ## ⚖️ Disclaimer
 
 This is an unofficial, personal open-source project created strictly for single-user monitoring of the user's authorized account. It is not affiliated with, maintained by, or endorsed by **ELMeasure India Pvt. Ltd.** or its affiliates.
