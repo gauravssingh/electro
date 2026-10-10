@@ -43,7 +43,7 @@ class Config:
     ELNET_IVKEY: str = os.getenv("ELNET_IVKEY", "")
     ELNET_FCM_TOKEN: str = os.getenv("ELNET_FCM_TOKEN", "")
     ELNET_POLL_INTERVAL_SECONDS: int = int(
-        os.getenv("ELNET_POLL_INTERVAL_SECONDS", "60")
+        os.getenv("ELNET_POLL_INTERVAL_SECONDS", "15")
     )
     ELNET_REQUEST_TIMEOUT_SECONDS: int = int(
         os.getenv("ELNET_REQUEST_TIMEOUT_SECONDS", "15")

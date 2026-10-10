@@ -55,9 +55,29 @@ def test_polling_fetch_success(repo):
     assert repo.count_snapshots() == 1
 
 
-def test_polling_auth_failure_halts_polling(repo):
+def test_polling_missing_credentials_halts_polling(repo):
     mock_client = MagicMock(spec=ELNetClient)
     mock_client.is_authenticated = False
+
+    poller = PollingService(
+        client=mock_client,
+        repository=repo,
+        username="",
+        password="",
+    )
+
+    success, snapshot, err = poller.fetch_once()
+
+    assert success is False
+    assert poller.status == "authentication_required"
+    assert poller.polling_enabled is False
+    assert poller.last_error_category == "configuration_error"
+
+
+def test_polling_auth_failure_schedules_backoff_retry(repo):
+    mock_client = MagicMock(spec=ELNetClient)
+    mock_client.is_authenticated = False
+    mock_client.meter_id = 1042
     mock_client.login.side_effect = ElnetAuthError("Invalid username or password")
 
     poller = PollingService(
@@ -65,6 +85,7 @@ def test_polling_auth_failure_halts_polling(repo):
         repository=repo,
         username="wrong_user",
         password="wrong_password",
+        poll_interval_seconds=15,
     )
 
     success, snapshot, err = poller.fetch_once()
@@ -72,7 +93,17 @@ def test_polling_auth_failure_halts_polling(repo):
     assert success is False
     assert err == "Invalid username or password"
     assert poller.status == "authentication_required"
-    assert poller.polling_enabled is False
+    # Polling remains enabled to allow recovery with backoff
+    assert poller.polling_enabled is True
+    assert poller.consecutive_failures == 1
+    assert poller.next_retry_at_utc is not None
+    assert poller.last_duration_ms is not None
+
+    # Verify poll event was recorded
+    events = repo.get_recent_poll_events(10)
+    assert len(events) == 1
+    assert events[0]["success"] == 0
+    assert events[0]["error_category"] == "authentication_error"
 
 
 def test_polling_transient_failure_marks_stale_and_preserves_last(repo):

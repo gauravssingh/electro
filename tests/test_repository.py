@@ -116,3 +116,32 @@ def test_get_history_and_range_validation(repo):
     # Invalid range should raise ValueError
     with pytest.raises(ValueError, match="Invalid range"):
         repo.get_history(meter_id=1042, range_str="invalid_range")
+
+
+def test_record_poll_events_and_health_stats(repo):
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    
+    # Record 2 successes, 1 failure
+    repo.record_poll_event(now_str, success=True, duration_ms=120, meter_id=1042)
+    repo.record_poll_event(now_str, success=True, duration_ms=180, meter_id=1042)
+    repo.record_poll_event(
+        now_str,
+        success=False,
+        duration_ms=50,
+        error_category="network_error",
+        error_message="Connection timed out",
+        meter_id=1042,
+    )
+
+    events = repo.get_recent_poll_events(limit=10)
+    assert len(events) == 3
+
+    stats = repo.get_poll_health_stats(hours=24)
+    assert stats["total_attempts"] == 3
+    assert stats["successes"] == 2
+    assert stats["failures"] == 1
+    assert stats["success_rate_pct"] == 66.7
+    assert stats["avg_duration_ms"] == 150.0
+    assert stats["last_failure"] is not None
+    assert stats["last_failure"]["error_category"] == "network_error"
+

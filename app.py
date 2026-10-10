@@ -13,6 +13,7 @@ from elnet.schemas import ErrorCategory
 from storage.repository import SnapshotRepository
 from services.polling import PollingService
 from services.normalization import map_power_source, map_relay_status
+from services.analytics import compute_source_duration_analytics
 
 
 def setup_logging(log_level_name: str) -> None:
@@ -145,6 +146,11 @@ def create_app(
             "stale": poller_status["stale"],
             "last_success_at": poller_status["last_success_at"],
             "last_attempt_at": poller_status["last_attempt_at"],
+            "last_duration_ms": poller_status.get("last_duration_ms"),
+            "age_seconds": poller_status.get("age_seconds"),
+            "consecutive_failures": poller_status.get("consecutive_failures", 0),
+            "next_retry_at": poller_status.get("next_retry_at"),
+            "poll_interval_seconds": poller_status.get("poll_interval_seconds"),
             "last_error_category": poller_status["last_error_category"],
             "last_error_message": poller_status["last_error_message"],
             "is_fetching": poller_status["is_fetching"],
@@ -153,7 +159,7 @@ def create_app(
 
     @app.route("/api/history")
     def api_history():
-        """Return historical points for time series charting."""
+        """Return historical points for time series charting and trustworthy duration analytics."""
         range_str = request.args.get("range", "24h").lower()
         if range_str not in SnapshotRepository.ALLOWED_RANGES:
             return jsonify({
@@ -163,11 +169,8 @@ def create_app(
         meter_id = app.poller.client.meter_id if (app.poller and app.poller.client) else None
         history = app.repository.get_history(meter_id=meter_id, range_str=range_str)
 
-        # Sanitize points and compute power source transitions
+        # Sanitize points
         points = []
-        transitions = []
-        last_status = None
-
         for row in history:
             current_status = row.get("eb_dg_status")
             relay_status = row.get("relay_status")
@@ -187,40 +190,15 @@ def create_app(
             }
             points.append(pt)
 
-            if last_status is not None and current_status != last_status:
-                transitions.append({
-                    "observed_at_utc": timestamp,
-                    "from_code": last_status,
-                    "from_source": map_power_source(last_status),
-                    "to_code": current_status,
-                    "to_source": map_power_source(current_status),
-                })
-            last_status = current_status
-
-        # Compute source analytics over the selected range
-        poll_interval = app.config.get("ELNET_POLL_INTERVAL_SECONDS", 60)
-        grid_count = sum(1 for p in points if p.get("eb_dg_status") == 0)
-        dg_count = sum(1 for p in points if p.get("eb_dg_status") == 1)
-        unknown_count = len(points) - grid_count - dg_count
-        dg_minutes = round(dg_count * (poll_interval / 60.0), 1)
-        grid_minutes = round(grid_count * (poll_interval / 60.0), 1)
-
-        analytics = {
-            "total_snapshots": len(points),
-            "grid_snapshots": grid_count,
-            "dg_snapshots": dg_count,
-            "unknown_snapshots": unknown_count,
-            "estimated_dg_minutes": dg_minutes,
-            "estimated_grid_minutes": grid_minutes,
-            "total_transitions": len(transitions),
-            "poll_interval_seconds": poll_interval,
-        }
+        # Compute source analytics using elapsed-time intervals and gap detection
+        poll_interval = app.config.get("ELNET_POLL_INTERVAL_SECONDS", 15)
+        analytics = compute_source_duration_analytics(points, poll_interval_seconds=poll_interval)
 
         return jsonify({
             "range": range_str,
             "count": len(points),
             "points": points,
-            "transitions": transitions,
+            "transitions": analytics["transitions"],
             "analytics": analytics,
         })
 
@@ -255,19 +233,59 @@ def create_app(
 
     @app.route("/healthz")
     def healthz():
-        """Local health check endpoint."""
+        """Process liveness probe."""
         return jsonify({
             "status": "ok",
             "app": "electro",
         })
 
+    @app.route("/api/health")
+    def api_health():
+        """Comprehensive service and telemetry health probe."""
+        poller_info = app.poller.get_status_info() if app.poller else None
+        stats_24h = app.repository.get_poll_health_stats(hours=24)
+        total_snaps = app.repository.count_snapshots()
+
+        status_label = "healthy"
+        if not app.poller or not poller_info or not poller_info.get("polling_enabled"):
+            status_label = "unhealthy"
+        elif poller_info.get("stale") or (poller_info.get("consecutive_failures", 0) > 0):
+            status_label = "degraded"
+
+        payload = {
+            "status": status_label,
+            "app": "electro",
+            "telemetry": poller_info,
+            "poll_stats_24h": stats_24h,
+            "database": {
+                "ok": True,
+                "snapshot_count": total_snaps,
+                "db_path": app.config.get("ELECTRO_DB_PATH"),
+            },
+        }
+        return jsonify(payload), 200 if status_label in ("healthy", "degraded") else 503
+
     return app
 
 
+# Module-level WSGI application instance for production runners (e.g. Gunicorn / Waitress)
+app = create_app(start_poller=True)
+
+
 if __name__ == "__main__":
-    app_instance = create_app(start_poller=True)
-    # Bind to loopback 127.0.0.1 by default for security
-    app_instance.run(
+    import signal
+
+    def handle_shutdown(signum, frame):
+        logging.getLogger("electro.app").info("Received signal %s; shutting down...", signum)
+        if hasattr(app, "poller") and app.poller:
+            app.poller.stop()
+        sys.exit(0)
+
+    signal.signal(signal.SIGINT, handle_shutdown)
+    signal.signal(signal.SIGTERM, handle_shutdown)
+
+    # Bind strictly to loopback 127.0.0.1 for security
+    app.run(
         host=Config.ELECTRO_HOST,
         port=Config.ELECTRO_PORT,
         debug=False,

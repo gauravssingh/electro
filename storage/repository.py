@@ -111,6 +111,91 @@ class SnapshotRepository:
             row = conn.execute(sql, params).fetchone()
             return row["cnt"] if row else 0
 
+    def record_poll_event(
+        self,
+        attempted_at_utc: str,
+        success: bool,
+        duration_ms: Optional[int] = None,
+        error_category: Optional[str] = None,
+        error_message: Optional[str] = None,
+        meter_id: Optional[int] = None,
+    ) -> int:
+        """Record an attempt to query the upstream ELNet service."""
+        sql = """
+            INSERT INTO poll_events (
+                attempted_at_utc, success, duration_ms, error_category, error_message, meter_id
+            ) VALUES (?, ?, ?, ?, ?, ?);
+        """
+        clean_meter_id = None
+        if meter_id is not None:
+            try:
+                clean_meter_id = int(meter_id)
+            except (ValueError, TypeError):
+                pass
+
+        params = (
+            attempted_at_utc,
+            1 if success else 0,
+            duration_ms,
+            error_category,
+            error_message,
+            clean_meter_id,
+        )
+        with get_db_connection(self.db_path) as conn:
+            cursor = conn.execute(sql, params)
+            return cursor.lastrowid
+
+    def get_recent_poll_events(self, limit: int = 20) -> List[Dict[str, Any]]:
+        """Retrieve recent poll attempts (successes and failures)."""
+        sql = "SELECT * FROM poll_events ORDER BY attempted_at_utc DESC, id DESC LIMIT ?;"
+        with get_db_connection(self.db_path) as conn:
+            rows = conn.execute(sql, (limit,)).fetchall()
+            return [dict(r) for r in rows]
+
+    def get_poll_health_stats(self, hours: int = 24) -> Dict[str, Any]:
+        """Compute poll reliability metrics over the specified recent window."""
+        cutoff = (datetime.now(timezone.utc) - timedelta(hours=hours)).strftime("%Y-%m-%dT%H:%M:%SZ")
+        with get_db_connection(self.db_path) as conn:
+            row = conn.execute(
+                """
+                SELECT
+                    COUNT(*) AS total_attempts,
+                    SUM(CASE WHEN success = 1 THEN 1 ELSE 0 END) AS successes,
+                    SUM(CASE WHEN success = 0 THEN 1 ELSE 0 END) AS failures,
+                    AVG(CASE WHEN success = 1 THEN duration_ms ELSE NULL END) AS avg_duration_ms
+                FROM poll_events
+                WHERE attempted_at_utc >= ?;
+                """,
+                (cutoff,),
+            ).fetchone()
+
+            total = row["total_attempts"] if row and row["total_attempts"] else 0
+            successes = row["successes"] if row and row["successes"] else 0
+            failures = row["failures"] if row and row["failures"] else 0
+            avg_ms = round(row["avg_duration_ms"], 1) if row and row["avg_duration_ms"] else 0.0
+
+            success_rate_pct = round((successes / total) * 100, 1) if total > 0 else 100.0
+
+            last_failure = conn.execute(
+                """
+                SELECT attempted_at_utc, error_category, error_message
+                FROM poll_events
+                WHERE success = 0
+                ORDER BY attempted_at_utc DESC, id DESC
+                LIMIT 1;
+                """
+            ).fetchone()
+
+            return {
+                "window_hours": hours,
+                "total_attempts": total,
+                "successes": successes,
+                "failures": failures,
+                "success_rate_pct": success_rate_pct,
+                "avg_duration_ms": avg_ms,
+                "last_failure": dict(last_failure) if last_failure else None,
+            }
+
     @staticmethod
     def _row_to_dict(row: Any) -> Dict[str, Any]:
         """Convert a sqlite3.Row to standard dictionary with native types."""
@@ -119,3 +204,4 @@ class SnapshotRepository:
             if d.get(bool_key) is not None:
                 d[bool_key] = bool(d[bool_key])
         return d
+

@@ -32,7 +32,7 @@ function formatKwh(val) {
 }
 
 // Update connection header status indicator
-function updateConnectionStatus(status, isStale, lastSuccess, errorCategory, errorMsg) {
+function updateConnectionStatus(status, isStale, lastSuccess, errorCategory, errorMsg, ageSeconds, nextRetry, pollInterval) {
   const dot = document.getElementById('connection-dot');
   const text = document.getElementById('connection-text');
   const banner = document.getElementById('alert-banner');
@@ -41,23 +41,26 @@ function updateConnectionStatus(status, isStale, lastSuccess, errorCategory, err
 
   dot.className = 'h-2 w-2 rounded-full mr-2';
 
+  const cadenceText = pollInterval ? `${pollInterval}s cadence` : '15s';
+  const ageDisplay = ageSeconds !== null && ageSeconds !== undefined ? `${Math.round(ageSeconds)}s ago` : formatTimestamp(lastSuccess);
+
   if (status === 'connected') {
     dot.classList.add('bg-emerald-500');
-    text.textContent = `Connected · ${formatTimestamp(lastSuccess)}`;
+    text.textContent = `Live (${cadenceText}) · Updated ${ageDisplay}`;
     banner.classList.add('hidden');
   } else if (status === 'authentication_required') {
     dot.classList.add('bg-rose-500', 'animate-pulse');
-    text.textContent = 'Authentication Required';
+    text.textContent = nextRetry ? `Auth Retry Pending (${formatTimestamp(nextRetry)})` : 'Authentication Required';
     banner.className = 'rounded-xl border border-rose-500/40 bg-rose-950/40 p-4 text-sm flex items-start space-x-3 text-rose-200';
     alertTitle.textContent = 'Authentication Required';
     alertBody.textContent = errorMsg || 'Please configure valid ELNet credentials in your local environment.';
     banner.classList.remove('hidden');
   } else if (status === 'stale' || isStale) {
     dot.classList.add('bg-amber-500');
-    text.textContent = `Stale Data · Last: ${formatTimestamp(lastSuccess)}`;
+    text.textContent = `Stale Data · Age: ${ageDisplay}`;
     banner.className = 'rounded-xl border border-amber-500/40 bg-amber-950/40 p-4 text-sm flex items-start space-x-3 text-amber-200';
-    alertTitle.textContent = 'Connection Warning';
-    alertBody.textContent = errorMsg || 'Upstream request failed; displaying cached snapshot data.';
+    alertTitle.textContent = 'Connection Degraded (Stale Data)';
+    alertBody.textContent = `${errorMsg || 'Upstream request failed; displaying cached snapshot data.'}${nextRetry ? ` Retrying at ${formatTimestamp(nextRetry)}.` : ''}`;
     banner.classList.remove('hidden');
   } else {
     dot.classList.add('bg-slate-500');
@@ -166,7 +169,10 @@ async function fetchDashboard() {
       data.stale,
       data.last_success_at,
       data.last_error_category,
-      data.last_error_message
+      data.last_error_message,
+      data.age_seconds,
+      data.next_retry_at,
+      data.poll_interval_seconds
     );
 
     const snapshot = data.data;
@@ -355,7 +361,9 @@ function renderAnalytics(analytics, range) {
   const gridTimeEl = document.getElementById('analytics-grid-time');
   const gridSubEl = document.getElementById('analytics-grid-sub');
   const transEl = document.getElementById('analytics-transitions');
-  const pctEl = document.getElementById('analytics-grid-percent');
+  const transSubEl = document.getElementById('analytics-transitions-sub');
+  const coverageEl = document.getElementById('analytics-coverage-pct');
+  const coverageSubEl = document.getElementById('analytics-coverage-sub');
 
   if (!rangeLabel) return;
 
@@ -366,25 +374,33 @@ function renderAnalytics(analytics, range) {
 
   const dgMins = analytics.estimated_dg_minutes || 0;
   const gridMins = analytics.estimated_grid_minutes || 0;
-  const totalSnapshots = analytics.total_snapshots || 0;
+  const gapMins = analytics.gap_minutes || 0;
   const dgSnapshots = analytics.dg_snapshots || 0;
   const gridSnapshots = analytics.grid_snapshots || 0;
   const transitionsCount = analytics.total_transitions || 0;
+  const coveragePct = analytics.telemetry_coverage_pct !== undefined ? analytics.telemetry_coverage_pct : 100;
+  const gridAvail = analytics.grid_availability_pct !== undefined ? analytics.grid_availability_pct : 100;
 
   if (dgTimeEl) dgTimeEl.textContent = formatDuration(dgMins);
-  if (dgSubEl) dgSubEl.textContent = `${dgSnapshots} snapshots`;
+  if (dgSubEl) dgSubEl.textContent = `${dgSnapshots} snaps (${(100 - gridAvail).toFixed(0)}% active)`;
 
   if (gridTimeEl) gridTimeEl.textContent = formatDuration(gridMins);
-  if (gridSubEl) gridSubEl.textContent = `${gridSnapshots} snapshots`;
+  if (gridSubEl) gridSubEl.textContent = `${gridSnapshots} snaps (${gridAvail.toFixed(0)}% active)`;
 
   if (transEl) transEl.textContent = transitionsCount;
+  if (transSubEl) transSubEl.textContent = `${transitionsCount === 1 ? '1 switch' : transitionsCount + ' switches'} detected`;
 
-  if (pctEl) {
-    if (totalSnapshots > 0) {
-      const pct = Math.round((gridSnapshots / totalSnapshots) * 100);
-      pctEl.textContent = `${pct}%`;
+  if (coverageEl) {
+    coverageEl.textContent = `${coveragePct}%`;
+    coverageEl.className = `text-lg font-bold mt-1 ${coveragePct < 90 ? 'text-amber-400' : 'text-cyan-400'}`;
+  }
+  if (coverageSubEl) {
+    if (gapMins > 0) {
+      coverageSubEl.textContent = `${formatDuration(gapMins)} unmonitored gap`;
+      coverageSubEl.className = 'text-[10px] text-amber-400 font-medium mt-0.5';
     } else {
-      pctEl.textContent = '--';
+      coverageSubEl.textContent = 'Continuous capture';
+      coverageSubEl.className = 'text-[10px] text-slate-500 mt-0.5';
     }
   }
 }

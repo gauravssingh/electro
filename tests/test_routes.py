@@ -215,3 +215,16 @@ def test_api_refresh_already_in_progress(client, app_and_repo):
     data = res.get_json()
     assert data["success"] is False
     assert "already in progress" in data["error"]
+
+
+def test_api_health_endpoint(client, app_and_repo):
+    res = client.get("/api/health")
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["status"] in ("healthy", "degraded")
+    assert data["app"] == "electro"
+    assert "telemetry" in data
+    assert "poll_stats_24h" in data
+    assert "database" in data
+    assert data["database"]["ok"] is True
+

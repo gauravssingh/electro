@@ -6,19 +6,21 @@
 [![Framework](https://img.shields.io/badge/Framework-Flask-black.svg)](https://flask.palletsprojects.com/)
 [![Database](https://img.shields.io/badge/Database-SQLite%20(WAL)-lightgrey.svg)](https://www.sqlite.org/)
 [![License](https://img.shields.io/badge/License-MIT-green.svg)](LICENSE)
-[![Tests](https://img.shields.io/badge/Tests-24%20Passing-brightgreen.svg)](tests/)
+[![Tests](https://img.shields.io/badge/Tests-32%20Passing-brightgreen.svg)](tests/)
 
-**Electro** is a lightweight, local-first web application and CLI that connects to the ELNet PPS smart electricity metering system. It reverse-engineers the observed Android AES-CBC encryption protocol, periodically snapshots live meter readings into a local SQLite database, and presents an interactive real-time dashboard for balance, energy consumption, and power source telemetry.
+**Electro** is a lightweight, local-first web application, background daemon, and CLI that connects to the ELNet PPS smart electricity metering system. It reverse-engineers the observed Android AES-CBC encryption protocol, periodically snapshots live meter readings into a local SQLite database, and presents an interactive real-time dashboard for balance, energy consumption, and power source telemetry.
 
 ---
 
 ## ⚡ Highlights
 
+- **Durable Periodic Capture**: Polls on a fixed monotonic cadence (15s default) independently of whether the browser is open.
 - **Active Power Source Detection**: Accurately decodes `EBDGStatus` (`0` = Main Grid / EB, `1` = Backup Generator / DG) verified from decompiled mobile sources.
-- **Source Transition Timeline**: Automatically records timestamps and transitions whenever supply switches between Grid and Generator.
-- **DG Analytics & Reliability**: Quantifies cumulative time spent running on DG vs Grid, transition frequencies, and grid availability percentage.
+- **Source Transition Timeline**: Records exact transition timestamps, detection delays, and previous/new source when power switches between Grid and Generator.
+- **Trustworthy Duration Analytics**: Computes elapsed time from adjacent observations with explicit unmonitored gap detection (survives Mac sleep, network drops, and service restarts without overcounting).
+- **macOS launchd Integration**: Ready to run as a persistent, self-healing per-user LaunchAgent with automated startup and bounded log rotation.
+- **Telemetry & Health Probing**: Exposes `/healthz` for process liveness and `/api/health` for detailed telemetry age, failure counts, and 24h success rates.
 - **Independent Relay Telemetry**: Displays `RelStatus` independently as informational state without conflating it with the power source.
-- **Real-Time Prepaid Tracking**: Observes balance deductions and reported cumulative kWh over 24-hour, 7-day, and 30-day windows.
 - **Strictly Read-Only**: Zero upstream mutation calls. No relay toggling, no recharge flows, no order creation, and no profile modifications.
 - **Privacy by Default**: Bearer authentication tokens are stored strictly in-memory and never written to disk or logs. The web server binds exclusively to `127.0.0.1`.
 
@@ -27,25 +29,22 @@
 ## 🏗️ Architecture
 
 ```text
-Browser (Local Loopback)
-  │
-  │  GET /                  (Dashboard UI)
-  │  GET /api/dashboard     (Live snapshot & power source status)
-  │  GET /api/history       (Historical time-series, DG analytics & transitions)
-  │  POST /api/refresh      (Non-blocking manual fetch)
+macOS launchd (LaunchAgent: com.gauravs.electro)
+  │  Runs at login, restarts on crashes, logs to ~/Library/Logs/electro/
   ▼
-Flask Application (app.py)
+Gunicorn / Flask Application (app.py)
   ├── Services
-  │     ├── PollingService (Non-blocking thread lock, periodic scheduler)
+  │     ├── PollingService (Fixed monotonic cadence, non-blocking lock, exponential backoff)
+  │     ├── Analytics      (Elapsed-time duration calculations, transition detection, gap analysis)
   │     └── Normalization  (Clean data model & EBDGStatus / RelStatus mappers)
   │
   ├── Storage (storage/)
-  │     ├── Repository (Time-series queries & analytics calculations)
+  │     ├── Repository (Snapshots & poll_events query interface)
   │     └── SQLite DB  (PRAGMA journal_mode=WAL, thread-safe connection lifecycle)
   │
   └── ELNet Client Adapter (elnet/)
         ├── Crypto Engine (AES-256-CBC, PKCS#7 padding matching Android Utility.java)
-        └── Client Adapter (In-memory token lifecycle, bounded exponential backoff)
+        └── Client Adapter (In-memory token lifecycle, recoverable session refresh)
               │
               │  POST /api/Dashboard/login     (Encrypted payload envelope)
               │  POST /api/Dashboard/HomeData  (Encrypted payload + Bearer token)
@@ -73,14 +72,14 @@ Flask Application (app.py)
 ### 1. Prerequisites
 
 - Python 3.9+ (tested with macOS Python 3.9.6)
-- Virtual environment
+- macOS (for LaunchAgent background daemon) or Linux
 
 ### 2. Installation
 
 Clone the repository and install dependencies:
 
 ```bash
-git clone https://github.com/your-username/electro.git
+git clone https://github.com/gauravssingh/electro.git
 cd electro
 
 python3 -m venv .venv
@@ -111,8 +110,8 @@ ELNET_PASSWORD=your_password
 ELNET_SKEY=your_32_character_skey
 ELNET_IVKEY=your_16_character_ivkey
 
-# Optional Polling & Server Options
-ELNET_POLL_INTERVAL_SECONDS=60
+# Optional Polling & Server Options (15s recommended for source transition detection)
+ELNET_POLL_INTERVAL_SECONDS=15
 ELNET_REQUEST_TIMEOUT_SECONDS=15
 ELECTRO_HOST=127.0.0.1
 ELECTRO_PORT=5000
@@ -122,9 +121,31 @@ ELECTRO_LOG_LEVEL=INFO
 
 ---
 
-## 💻 Usage
+## 💻 Running Electro
 
-### Run the Web Dashboard
+### Option A: Install as an Always-On macOS Service (Recommended)
+
+To run Electro continuously in the background on your Mac across restarts and logins:
+
+```bash
+./scripts/launchd/install_service.sh
+```
+
+- Installs `~/Library/LaunchAgents/com.gauravs.electro.plist` running via Gunicorn under your user session (no root needed).
+- Automatically starts on login and restarts if interrupted.
+- Standard logs are written to `~/Library/Logs/electro/`.
+
+To inspect service health and logs:
+```bash
+./scripts/launchd/service_status.sh
+```
+
+To stop and remove the service:
+```bash
+./scripts/launchd/uninstall_service.sh
+```
+
+### Option B: Run in Terminal for Development
 
 ```bash
 ./.venv/bin/python app.py
@@ -133,12 +154,9 @@ ELECTRO_LOG_LEVEL=INFO
 Open your browser to:
 👉 **[http://127.0.0.1:5000](http://127.0.0.1:5000)**
 
-- The dashboard will automatically authenticate, capture an initial snapshot, and start periodic background polling every 60 seconds.
-- Click **Refresh Now** in the top-right header at any time to trigger an immediate fetch.
+### Option C: Run the Standalone CLI Client
 
-### Run the Standalone CLI Client
-
-To run a quick terminal check and inspect live JSON telemetry:
+To test authentication and print raw decrypted telemetry to stdout:
 
 ```bash
 ./.venv/bin/python elnet_client.py
