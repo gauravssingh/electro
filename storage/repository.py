@@ -24,9 +24,21 @@ class SnapshotRepository:
 
     def insert_snapshot(self, snapshot: Dict[str, Any]) -> int:
         """Insert a normalized snapshot and return its generated ID."""
+        persisted_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        params = dict(snapshot)
+
+        # Ensure timestamp lifecycle values are populated
+        if "persisted_at_utc" not in params or not params["persisted_at_utc"]:
+            params["persisted_at_utc"] = persisted_now
+        if "attempted_at_utc" not in params or not params["attempted_at_utc"]:
+            params["attempted_at_utc"] = params.get("observed_at_utc", persisted_now)
+        if "received_at_utc" not in params or not params["received_at_utc"]:
+            params["received_at_utc"] = params.get("observed_at_utc", persisted_now)
+
         sql = """
             INSERT INTO snapshots (
-                observed_at_utc, meter_id, device_id, meter_balance, relay_status,
+                observed_at_utc, attempted_at_utc, received_at_utc, persisted_at_utc,
+                meter_id, device_id, meter_balance, relay_status,
                 kwh_rec_today, kvah_rec_today, kwh_del_today, solar_today, kvah_del_today,
                 kwh_rec_month, kvah_rec_month, kwh_del_month, solar_month, kvah_del_month,
                 current_day_eb, current_day_dg, current_day_solar, fixed_charges_today,
@@ -34,7 +46,8 @@ class SnapshotRepository:
                 is_eb, is_dg, is_solar, is_fixed_charge, is_coil_enable,
                 eb_dg_status, kwh_kvah_status, meter_sn
             ) VALUES (
-                :observed_at_utc, :meter_id, :device_id, :meter_balance, :relay_status,
+                :observed_at_utc, :attempted_at_utc, :received_at_utc, :persisted_at_utc,
+                :meter_id, :device_id, :meter_balance, :relay_status,
                 :kwh_rec_today, :kvah_rec_today, :kwh_del_today, :solar_today, :kvah_del_today,
                 :kwh_rec_month, :kvah_rec_month, :kwh_del_month, :solar_month, :kvah_del_month,
                 :current_day_eb, :current_day_dg, :current_day_solar, :fixed_charges_today,
@@ -43,7 +56,6 @@ class SnapshotRepository:
                 :eb_dg_status, :kwh_kvah_status, :meter_sn
             );
         """
-        params = dict(snapshot)
         # Convert bools to int for SQLite
         for bool_key in ("is_eb", "is_dg", "is_solar", "is_fixed_charge", "is_coil_enable"):
             val = params.get(bool_key)

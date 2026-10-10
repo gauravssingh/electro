@@ -14,8 +14,23 @@ MIGRATIONS_DIR = Path(__file__).parent / "migrations"
 @contextmanager
 def get_db_connection(db_path: str) -> Generator[sqlite3.Connection, None, None]:
     """Provide a thread-safe SQLite connection with WAL mode and row factory."""
-    Path(db_path).parent.mkdir(parents=True, exist_ok=True)
-    conn = sqlite3.connect(db_path, timeout=10.0, check_same_thread=False)
+    parent_dir = Path(db_path).parent
+    try:
+        parent_dir.mkdir(parents=True, exist_ok=True, mode=0o700)
+        try:
+            parent_dir.chmod(0o700)
+        except OSError:
+            pass
+    except Exception as e:
+        logger.error("Failed to create database directory %s: %s", parent_dir, e)
+        raise
+
+    try:
+        conn = sqlite3.connect(db_path, timeout=10.0, check_same_thread=False)
+    except Exception as e:
+        logger.error("Failed to connect to SQLite database at %s: %s", db_path, e)
+        raise
+
     conn.row_factory = sqlite3.Row
     try:
         conn.execute("PRAGMA journal_mode = WAL;")

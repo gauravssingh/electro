@@ -1,5 +1,6 @@
 """Configuration module for Electro."""
 
+import sys
 from typing import Optional
 import os
 from pathlib import Path
@@ -35,6 +36,13 @@ load_dotenv()
 PROJECT_ROOT = Path(__file__).resolve().parent
 
 
+def get_default_db_path() -> Path:
+    """Return platform-standard default database path."""
+    if sys.platform == "darwin":
+        return Path.home() / "Library" / "Application Support" / "Electro" / "electro.db"
+    return PROJECT_ROOT / "electro.db"
+
+
 class Config:
     """Application configuration."""
 
@@ -54,14 +62,19 @@ class Config:
 
     # Local application settings
     @staticmethod
-    def _resolve_db_path() -> str:
-        raw = os.getenv("ELECTRO_DB_PATH", "electro.db")
-        p = Path(raw)
-        if not p.is_absolute():
-            p = PROJECT_ROOT / p
+    def resolve_db_path(raw_path: Optional[str] = None) -> str:
+        """Resolve database path, expanding ~ and anchoring relative paths to PROJECT_ROOT."""
+        raw = os.getenv("ELECTRO_DB_PATH") if raw_path is None else raw_path
+        if not raw or not str(raw).strip():
+            p = get_default_db_path()
+        else:
+            p = Path(os.path.expanduser(str(raw).strip()))
+            if not p.is_absolute():
+                p = PROJECT_ROOT / p
         return str(p)
 
-    ELECTRO_DB_PATH: str = _resolve_db_path.__func__()
+    _resolve_db_path = resolve_db_path
+    ELECTRO_DB_PATH: str = resolve_db_path.__func__()
     ELECTRO_HOST: str = os.getenv("ELECTRO_HOST", "127.0.0.1")
     ELECTRO_PORT: int = int(os.getenv("ELECTRO_PORT", "5000"))
     ELECTRO_LOG_LEVEL: str = os.getenv("ELECTRO_LOG_LEVEL", "INFO").upper()

@@ -148,12 +148,16 @@ def create_app(
             "last_attempt_at": poller_status["last_attempt_at"],
             "last_duration_ms": poller_status.get("last_duration_ms"),
             "age_seconds": poller_status.get("age_seconds"),
+            "freshness_threshold_seconds": poller_status.get("freshness_threshold_seconds"),
             "consecutive_failures": poller_status.get("consecutive_failures", 0),
             "next_retry_at": poller_status.get("next_retry_at"),
+            "next_scheduled_poll_at": poller_status.get("next_scheduled_poll_at"),
             "poll_interval_seconds": poller_status.get("poll_interval_seconds"),
             "last_error_category": poller_status["last_error_category"],
             "last_error_message": poller_status["last_error_message"],
             "is_fetching": poller_status["is_fetching"],
+            "is_collector_owner": poller_status.get("is_collector_owner", False),
+            "collector_running": poller_status.get("collector_running", False),
             "data": data_clean,
         })
 
@@ -211,6 +215,12 @@ def create_app(
                 "error": "Poller service is not configured"
             }), 503
 
+        if hasattr(app.poller, "is_collector_owner") and not app.poller.is_collector_owner:
+            return jsonify({
+                "success": False,
+                "error": "Refresh unavailable: another process owns the collector worker"
+            }), 409
+
         if app.poller.is_fetching:
             return jsonify({
                 "success": False,
@@ -248,6 +258,8 @@ def create_app(
 
         status_label = "healthy"
         if not app.poller or not poller_info or not poller_info.get("polling_enabled"):
+            status_label = "unhealthy"
+        elif poller_info.get("status") in ("configuration_error", "offline"):
             status_label = "unhealthy"
         elif poller_info.get("stale") or (poller_info.get("consecutive_failures", 0) > 0):
             status_label = "degraded"

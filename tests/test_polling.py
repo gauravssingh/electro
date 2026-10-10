@@ -69,7 +69,7 @@ def test_polling_missing_credentials_halts_polling(repo):
     success, snapshot, err = poller.fetch_once()
 
     assert success is False
-    assert poller.status == "authentication_required"
+    assert poller.status == "configuration_error"
     assert poller.polling_enabled is False
     assert poller.last_error_category == "configuration_error"
 

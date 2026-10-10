@@ -45,10 +45,24 @@ def normalize_home_data(
     raw: Dict[str, Any],
     meter_id: int,
     observed_at_utc: Optional[str] = None,
+    attempted_at_utc: Optional[str] = None,
+    received_at_utc: Optional[str] = None,
 ) -> Dict[str, Any]:
-    """Normalize raw HomeData dictionary into internal database snapshot format."""
+    """Normalize raw HomeData dictionary into internal database snapshot format.
+    
+    Timestamps:
+    - attempted_at_utc: when the capture request started.
+    - received_at_utc: when the response was received and decoded.
+    - observed_at_utc: backwards-compatible observation timestamp representing received_at_utc.
+    """
+    now_utc_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    if not received_at_utc:
+        received_at_utc = observed_at_utc or now_utc_str
     if not observed_at_utc:
-        observed_at_utc = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+        observed_at_utc = received_at_utc
+    if not attempted_at_utc:
+        attempted_at_utc = observed_at_utc
 
     device_id = raw.get("DeviceId")
     device_id_str = str(device_id) if device_id is not None else None
@@ -58,6 +72,8 @@ def normalize_home_data(
 
     return {
         "observed_at_utc": observed_at_utc,
+        "attempted_at_utc": attempted_at_utc,
+        "received_at_utc": received_at_utc,
         "meter_id": int(meter_id),
         "device_id": device_id_str,
         "meter_balance": _to_float(raw.get("MeterBal")),

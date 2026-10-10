@@ -19,6 +19,7 @@ def app_and_repo(tmp_path):
     mock_poller.client = MagicMock()
     mock_poller.client.meter_id = 1042
     mock_poller.status = "connected"
+    mock_poller.is_collector_owner = True
     mock_poller.last_success_at_utc = "2026-10-10T12:00:00Z"
     mock_poller.is_fetching = False
     mock_poller.get_status_info.return_value = {
