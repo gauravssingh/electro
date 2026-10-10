@@ -159,3 +159,84 @@ def test_standby_process_reads_freshness_from_database(repo):
     assert info["stale"] is False
     assert info["is_collector_owner"] is False
     assert info["collector_running"] is False
+
+
+def test_legacy_snapshots_readable_with_missing_timestamps_represented_honestly(repo):
+    """Legacy snapshots without lifecycle columns remain fully readable with NULL represented as None."""
+    from storage.db import get_db_connection
+
+    legacy_time = (datetime.now(timezone.utc) - timedelta(days=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    # Insert row directly without lifecycle timestamps (simulating historical pre-migration data)
+    with get_db_connection(repo.db_path) as conn:
+        conn.execute(
+            """
+            INSERT INTO snapshots (
+                observed_at_utc, meter_id, device_id, meter_balance, relay_status,
+                kwh_rec_today, kvah_rec_today, kwh_del_today, solar_today, kvah_del_today,
+                kwh_rec_month, kvah_rec_month, kwh_del_month, solar_month, kvah_del_month,
+                current_day_eb, current_day_dg, current_day_solar, fixed_charges_today,
+                current_month_eb, current_month_dg, current_month_solar, fixed_charges_month,
+                is_eb, is_dg, is_solar, is_fixed_charge, is_coil_enable,
+                eb_dg_status, kwh_kvah_status, meter_sn
+            ) VALUES (
+                ?, 1042, '1042', 300.0, 'ON',
+                5.0, 5.0, 0.0, 0.0, 0.0,
+                50.0, 50.0, 0.0, 0.0, 0.0,
+                25.0, 0.0, 0.0, 0.0,
+                250.0, 0.0, 0.0, 0.0,
+                1, 0, 0, 0, 0,
+                0, 1, 'LEGACY_METER'
+            );
+            """,
+            (legacy_time,),
+        )
+
+    # Verify get_latest_snapshot reads the legacy row honestly
+    latest = repo.get_latest_snapshot(1042)
+    assert latest is not None
+    assert latest["observed_at_utc"] == legacy_time
+    assert latest["attempted_at_utc"] is None
+    assert latest["received_at_utc"] is None
+    assert latest["persisted_at_utc"] is None
+    assert latest["meter_balance"] == 300.0
+
+    # Verify get_history reads the legacy row honestly
+    history = repo.get_history(1042, range_str="30d")
+    assert len(history) >= 1
+    legacy_point = [p for p in history if p["observed_at_utc"] == legacy_time][0]
+    assert legacy_point["attempted_at_utc"] is None
+    assert legacy_point["received_at_utc"] is None
+    assert legacy_point["persisted_at_utc"] is None
+
+
+def test_persisted_at_utc_semantics_and_ordering(repo):
+    """Verify persisted_at_utc represents the SQLite write time and respects attempt/received ordering."""
+    attempt_time = "2026-10-10T15:00:00Z"
+    received_time = "2026-10-10T15:00:02Z"
+
+    raw = {
+        "DeviceId": 1042,
+        "MeterBal": 500.0,
+        "RelStatus": "ON",
+        "kWhRecToday": 1.0,
+    }
+
+    normalized = normalize_home_data(
+        raw,
+        meter_id=1042,
+        attempted_at_utc=attempt_time,
+        received_at_utc=received_time,
+    )
+
+    # Before inserting, persisted_at_utc is not set by normalization
+    assert normalized.get("persisted_at_utc") is None
+
+    # Insert into repository
+    snap_id = repo.insert_snapshot(normalized)
+    assert snap_id is not None
+
+    stored = repo.get_latest_snapshot(1042)
+    assert stored is not None
+    assert stored["persisted_at_utc"] is not None
+    # Chronological invariant: attempt <= receipt <= persistence
+    assert stored["attempted_at_utc"] <= stored["received_at_utc"] <= stored["persisted_at_utc"]

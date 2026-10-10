@@ -23,7 +23,17 @@ class SnapshotRepository:
         run_migrations(self.db_path)
 
     def insert_snapshot(self, snapshot: Dict[str, Any]) -> int:
-        """Insert a normalized snapshot and return its generated ID."""
+        """Insert a normalized snapshot and return its generated ID.
+        
+        Timestamp lifecycle semantics:
+        - attempted_at_utc: When upstream HTTP query cycle was initiated.
+        - received_at_utc: When upstream payload was received and parsed.
+        - persisted_at_utc: When this repository record was inserted into SQLite.
+        - observed_at_utc: Primary observation timestamp (corresponds to received_at_utc).
+        
+        Note for legacy rows: snapshots prior to migration 003 have NULL in
+        attempted_at_utc, received_at_utc, and persisted_at_utc columns.
+        """
         persisted_now = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
         params = dict(snapshot)
 

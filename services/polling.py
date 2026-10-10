@@ -136,8 +136,13 @@ class PollingService:
         if self._lock_file is None:
             # We don't hold the long-lived process lock. Try acquiring advisory lock temporarily.
             try:
-                self._lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                if not self._lock_path.parent.exists():
+                    self._lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                 temp_lock_file = open(self._lock_path, "a+")
+                try:
+                    self._lock_path.chmod(0o600)
+                except OSError:
+                    pass
                 fcntl.flock(temp_lock_file, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except (BlockingIOError, OSError):
                 if temp_lock_file:
@@ -324,8 +329,13 @@ class PollingService:
         # Attempt to acquire advisory process-level file lock if not already held
         if self._lock_file is None:
             try:
-                self._lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
+                if not self._lock_path.parent.exists():
+                    self._lock_path.parent.mkdir(parents=True, exist_ok=True, mode=0o700)
                 f = open(self._lock_path, "a+")
+                try:
+                    self._lock_path.chmod(0o600)
+                except OSError:
+                    pass
                 fcntl.flock(f, fcntl.LOCK_EX | fcntl.LOCK_NB)
                 self._lock_file = f
                 self.is_collector_owner = True

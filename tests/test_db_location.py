@@ -75,3 +75,25 @@ def test_db_connection_fails_fast_without_fallback(tmp_path):
     with pytest.raises((sqlite3.OperationalError, NotADirectoryError, OSError)):
         with get_db_connection(str(invalid_db_path)) as conn:
             conn.execute("SELECT 1;")
+
+
+def test_existing_directory_permissions_are_not_modified(tmp_path):
+    """An existing directory's permissions must remain unchanged when configuring a DB path inside it."""
+    shared_dir = tmp_path / "shared_folder"
+    shared_dir.mkdir(mode=0o755, exist_ok=True)
+    shared_dir.chmod(0o755)
+
+    original_mode = stat.S_IMODE(os.stat(str(shared_dir)).st_mode)
+    assert original_mode == 0o755
+
+    db_file = shared_dir / "electro.db"
+    with get_db_connection(str(db_file)) as conn:
+        conn.execute("CREATE TABLE test_tbl (id INT);")
+
+    # Directory permissions MUST remain untouched
+    after_mode = stat.S_IMODE(os.stat(str(shared_dir)).st_mode)
+    assert after_mode == original_mode == 0o755
+
+    # Database file itself must be restricted to 0600 (owner read/write only)
+    file_mode = stat.S_IMODE(os.stat(str(db_file)).st_mode)
+    assert file_mode == 0o600

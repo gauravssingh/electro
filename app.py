@@ -256,17 +256,46 @@ def create_app(
         stats_24h = app.repository.get_poll_health_stats(hours=24)
         total_snaps = app.repository.count_snapshots()
 
-        status_label = "healthy"
+        is_owner = getattr(app.poller, "is_collector_owner", False) if app.poller else False
+        collector_running = poller_info.get("collector_running", False) if poller_info else False
+        is_stale = poller_info.get("stale", True) if poller_info else True
+
+        if not is_owner:
+            collector_role = "standby"
+            collector_status = "standby"
+            collector_active_elsewhere = not is_stale
+        elif collector_running:
+            collector_role = "owner"
+            collector_status = "active"
+            collector_active_elsewhere = None
+        else:
+            collector_role = "owner"
+            collector_status = "stopped"
+            collector_active_elsewhere = None
+
         if not app.poller or not poller_info or not poller_info.get("polling_enabled"):
             status_label = "unhealthy"
         elif poller_info.get("status") in ("configuration_error", "offline"):
             status_label = "unhealthy"
-        elif poller_info.get("stale") or (poller_info.get("consecutive_failures", 0) > 0):
+        elif not is_owner:
+            status_label = "standby" if not is_stale else "degraded"
+        elif is_stale or (poller_info.get("consecutive_failures", 0) > 0):
             status_label = "degraded"
+        else:
+            status_label = "healthy"
 
         payload = {
             "status": status_label,
             "app": "electro",
+            "web": {
+                "status": "healthy",
+            },
+            "collector": {
+                "role": collector_role,
+                "running": collector_running,
+                "status": collector_status,
+                "active_elsewhere": collector_active_elsewhere,
+            },
             "telemetry": poller_info,
             "poll_stats_24h": stats_24h,
             "database": {
@@ -275,7 +304,7 @@ def create_app(
                 "db_path": app.config.get("ELECTRO_DB_PATH"),
             },
         }
-        return jsonify(payload), 200 if status_label in ("healthy", "degraded") else 503
+        return jsonify(payload), 200 if status_label in ("healthy", "standby", "degraded") else 503
 
     return app
 

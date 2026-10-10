@@ -213,6 +213,12 @@ def test_shutdown_timeout_retains_ownership_and_thread(repo):
     assert poller._thread.is_alive() is True
     assert poller.is_collector_owner is True
 
+    # Ensure another process cannot acquire the file lock while the original worker is alive
+    f_competing = open(poller._lock_path, "a+")
+    with pytest.raises(BlockingIOError):
+        fcntl.flock(f_competing, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    f_competing.close()
+
     # Starting again does not launch a replacement worker
     existing_thread = poller._thread
     assert poller.start() is True
@@ -249,3 +255,50 @@ def test_api_refresh_blocked_on_standby_process(repo):
     data = res.get_json()
     assert data["success"] is False
     assert "another process owns the collector worker" in data["error"]
+
+
+def test_standby_web_process_health_probe_distinguishes_collector_status(repo):
+    """A standby web process must report web: healthy, collector: standby, and status: standby (not healthy)."""
+    mock_poller = MagicMock(spec=PollingService)
+    mock_poller.client = MagicMock()
+    mock_poller.client.meter_id = 1042
+    mock_poller.status = "standby"
+    mock_poller.is_collector_owner = False
+    mock_poller.is_fetching = False
+    mock_poller.get_status_info.return_value = {
+        "status": "standby",
+        "stale": False,
+        "last_attempt_at": "2026-10-10T12:00:00Z",
+        "last_success_at": "2026-10-10T12:00:00Z",
+        "last_error_category": None,
+        "last_error_message": None,
+        "consecutive_failures": 0,
+        "polling_enabled": True,
+        "is_fetching": False,
+        "is_collector_owner": False,
+        "collector_running": False,
+    }
+
+    app = create_app(
+        test_config={
+            "TESTING": True,
+            "ELECTRO_DB_PATH": repo.db_path,
+            "POLLING_SERVICE": mock_poller,
+        },
+        start_poller=False,
+    )
+    client = app.test_client()
+
+    res = client.get("/api/health")
+    assert res.status_code == 200
+    data = res.get_json()
+
+    # The top-level status must reflect standby, NOT healthy!
+    assert data["status"] == "standby"
+    # The web process is healthy
+    assert data["web"]["status"] == "healthy"
+    # The collector status is explicitly standby, not running or healthy
+    assert data["collector"]["role"] == "standby"
+    assert data["collector"]["running"] is False
+    assert data["collector"]["status"] == "standby"
+    assert data["collector"]["active_elsewhere"] is True
