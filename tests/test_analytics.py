@@ -103,3 +103,29 @@ def test_analytics_unknown_ebdg_status():
     assert res["dg_seconds"] == 0.0
     assert res["unknown_seconds"] == 30.0
     assert res["unknown_snapshots"] == 3
+
+
+def test_analytics_balance_and_consumption_deltas():
+    points = [
+        {
+            "observed_at_utc": "2026-10-10T12:00:00Z",
+            "eb_dg_status": 0,
+            "meter_balance": 1500.0,
+            "kwh_rec_month": 120.5,
+        },
+        {
+            "observed_at_utc": "2026-10-10T12:00:30Z",
+            "eb_dg_status": 0,
+            "meter_balance": 1490.0,
+            "kwh_rec_month": 122.0,
+        },
+    ]
+
+    res = compute_source_duration_analytics(points, poll_interval_seconds=15)
+
+    assert res["balance_start"] == 1500.0
+    assert res["balance_end"] == 1490.0
+    assert res["balance_change"] == -10.0
+    assert res["kwh_start"] == 120.5
+    assert res["kwh_end"] == 122.0
+    assert res["consumption_kwh"] == 1.5

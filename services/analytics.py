@@ -140,6 +140,30 @@ def compute_source_duration_analytics(
     else:
         grid_availability_pct = 100.0
 
+    # Balance and consumption delta calculations across the window
+    balance_start = None
+    balance_end = None
+    balance_change = None
+    kwh_start = None
+    kwh_end = None
+    consumption_kwh = None
+
+    if points:
+        first_bal = points[0].get("meter_balance")
+        last_bal = points[-1].get("meter_balance")
+        if first_bal is not None and last_bal is not None:
+            balance_start = round(float(first_bal), 2)
+            balance_end = round(float(last_bal), 2)
+            balance_change = round(balance_end - balance_start, 2)
+
+        first_kwh = points[0].get("kwh_rec_month")
+        last_kwh = points[-1].get("kwh_rec_month")
+        if first_kwh is not None and last_kwh is not None:
+            kwh_start = round(float(first_kwh), 2)
+            kwh_end = round(float(last_kwh), 2)
+            if kwh_end >= kwh_start:
+                consumption_kwh = round(kwh_end - kwh_start, 2)
+
     return {
         "total_snapshots": len(points),
         "grid_snapshots": grid_count,
@@ -159,4 +183,10 @@ def compute_source_duration_analytics(
         "poll_interval_seconds": poll_interval_seconds,
         "max_gap_seconds": max_gap_seconds,
         "transitions": transitions,
+        "balance_start": balance_start,
+        "balance_end": balance_end,
+        "balance_change": balance_change,
+        "kwh_start": kwh_start,
+        "kwh_end": kwh_end,
+        "consumption_kwh": consumption_kwh,
     }

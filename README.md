@@ -159,12 +159,26 @@ To stop and remove the service:
 Open your browser to:
 👉 **[http://127.0.0.1:5000](http://127.0.0.1:5000)**
 
-### Option C: Run the Standalone CLI Client
+### Option C: Standalone Native CLI (`electro`)
 
-To test authentication and print raw decrypted telemetry to stdout:
+For terminal workflows, LLM agents (Antigravity, Hermes, Claude, MCP), or remote querying (e.g. against a Raspberry Pi):
 
 ```bash
-./.venv/bin/python elnet_client.py
+# Build and install binary to ~/.cargo/bin/electro
+cargo install --path cli
+
+# Initialize endpoint and optional access token
+electro init --endpoint http://127.0.0.1:5000 [--token <secret>]
+
+# Instant status check (Grid vs DG, balance, relay, freshness)
+electro status
+
+# Machine-readable JSON for LLM tool-calling and autonomous agents
+electro status --json
+electro summary --range 24h --json
+
+# Export snapshots to CSV
+electro export --range 24h --output snapshots.csv
 ```
 
 ---
