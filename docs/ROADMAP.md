@@ -25,6 +25,12 @@ The guiding principle is:
 
 The collection service and historical data are the foundation. Future analytics must be derived from validated, persisted observations, with uncertainty and missing data represented honestly.
 
+### Dual Interface Strategy
+
+Electro is designed with dual first-class interfaces:
+- **Web Dashboard**: Visual, interactive, and glanceable for human daily monitoring across desktop and mobile browsers.
+- **LLM & Agentic Rust CLI (`electro`)**: A lightning-fast, standalone native binary optimized for LLMs, autonomous agents (Hermes, Claude, Antigravity, MCP sidecars), and terminal workflows to inspect power status, balance, outages, and consumption programmatically.
+
 ## 2. Product Principles and Constraints
 
 Preserve the current product direction unless there is a clear, documented reason to change it.
@@ -32,7 +38,7 @@ Preserve the current product direction unless there is a clear, documented reaso
 - **Single user:** Electro is a personal application, not a multi-tenant service.
 - **Self-hosted:** It runs on the user's Mac.
 - **Private by default:** Keep the service local-only and bind to `127.0.0.1` by default.
-- **Simple stack:** Python/Flask, SQLite, HTML, Tailwind CSS, and vanilla JavaScript.
+- **Simple stack:** Python/Flask backend and collector, SQLite (WAL), Tailwind/JS web UI, and a compiled Rust CLI (`electro`) for instant LLM tool calling without heavy runtimes.
 - **No unnecessary infrastructure:** Do not introduce React, Docker, Redis, message brokers, cloud databases, or hosted services without a concrete need.
 - **Capture independent of the browser:** The background collector must continue when the dashboard is closed.
 - **Read-only upstream integration:** Do not add ELNet relay control, recharge/order creation, password/profile updates, or other state-changing upstream operations.
@@ -150,6 +156,66 @@ Potential features:
 - Settings must be validated and their effects documented.
 - Backups must be restorable and must not expose credentials or unnecessary sensitive data.
 - Do not delete historical data automatically without an explicit retention policy.
+
+### Phase 5 — LLM & Agentic Interface (Rust CLI `electro`)
+
+**Priority:** High / Medium (Dual Interface Foundation)  
+**Goal:** Provide a blazingly fast (<10ms), standalone Rust CLI binary (`electro`) specifically designed for LLMs, autonomous AI agents (Hermes, Claude, Antigravity, MCP), and terminal workflows when querying electricity telemetry, power cuts, costs, and consumption.
+
+Both the **Web Dashboard** (human visual monitoring) and the **Rust CLI** (LLM tool-calling & terminal interaction) serve as first-class interfaces to Electro.
+
+Planned work:
+
+- **Standalone Native Binary (`electro`)**:
+  - Implemented in Rust (using `clap`, `ureq` / `reqwest`, and `serde_json`) with zero startup latency, instant execution, and minimal memory footprint.
+  - Zero Python runtime or virtual environment activation needed when invoked by external agent processes or background workers.
+- **Pure API-Driven Architecture (Decoupled from Database Filesystem)**:
+  - The CLI interacts purely via Electro's REST API (`/api/dashboard`, `/api/history`, `/api/health`).
+  - **Decoupled from local storage**: Eliminates direct SQLite dependencies, filesystem permissions, and shared file locking.
+  - **Distributed & Remote Topology Ready**:
+    - Default target: `http://127.0.0.1:5000` (local macOS setup).
+    - Configurable target: via `--endpoint` flag, `ELECTRO_ENDPOINT` environment variable, or stored profile.
+    - Enables deploying the lightweight Electro collector daemon on a dedicated 24/7 low-power device (e.g. **Raspberry Pi** or home server consuming ~35MB RAM) while the CLI runs on the user's primary workstation where LLM agents live.
+- **API Access Token Authentication (`ELECTRO_API_TOKEN`)**:
+  - Secure token-based authentication protecting Electro when bound beyond loopback (`0.0.0.0`, LAN, or Tailnet).
+  - Configured on the server via `ELECTRO_API_TOKEN` in `.env` (or generated on first setup).
+  - Enforced across all `/api/*` data endpoints via `Authorization: Bearer <token>` or `X-Electro-Token: <token>`.
+  - Missing or invalid tokens return clean HTTP 401 JSON error envelopes (`{"error": "unauthorized", "message": "Valid Bearer token required"}`).
+  - Liveness probe (`/healthz`) remains lightweight and unauthenticated for local process monitors.
+- **Standalone CLI Initialization & Config Profiles (`electro init`)**:
+  - `electro init`: Interactive setup wizard or scripted command to initialize a standalone client:
+    ```bash
+    electro init --endpoint http://raspberrypi.local:5000 --token <access-token>
+    ```
+  - **Validation Probe**: Tests connection and authentication against `/api/health` before saving to prevent bad configurations.
+  - **Config Persistence**: Stored in standard XDG path `~/.config/electro/config.toml` with restricted file permissions (`chmod 600`).
+  - **Precedence Hierarchy**:
+    1. CLI flags (`--endpoint`, `--token`)
+    2. Environment variables (`ELECTRO_ENDPOINT`, `ELECTRO_TOKEN`)
+    3. Stored profile in `~/.config/electro/config.toml`
+    4. Local default (`http://127.0.0.1:5000`, unauthenticated)
+  - **LLM Agent Experience**: Agents run bare commands (`electro status --json`) without needing tokens or endpoints hardcoded into their system prompts.
+- **LLM-Optimized Subcommands**:
+  - `electro init`: Initialize endpoint URL and access token.
+  - `electro status` / `electro current`: Current power source (`grid` vs `dg`), live meter balance (₹), telemetry age/freshness, and relay status.
+  - `electro summary [--range 24h|today|7d|30d]`: Interval electricity consumption ($\Delta$ kWh), net expenditure (₹), backup generator runtime, and telemetry coverage.
+  - `electro transitions [--limit N]`: Chronological outage and Grid $\leftrightarrow$ Generator switch history with exact timestamps and durations.
+  - `electro forecast`: Projected balance runway, daily burn rate (₹/day), and estimated days until low-balance alert.
+  - `electro health`: Daemon collector liveness, SQLite database integrity, and last successful poll.
+- **Agent-First Output Contracts**:
+  - Machine-readable `--json` output by default (or clean flag) with minimal token overhead and well-defined schemas so LLMs can cleanly parse and reason over metrics without string scraping.
+  - Human-friendly `--plain` / `--table` summary mode for quick terminal inspection.
+  - Deterministic exit codes (`0` = OK, `1` = Stale/Degraded, `2` = Unreachable/Error, `3` = Unauthorized) with structured JSON error envelopes.
+- **MCP & Tool Integration**:
+  - Native compatibility with Model Context Protocol (MCP) server definitions and local agent skill systems so LLMs can autonomously invoke `electro` to answer user questions about household electricity.
+
+**Acceptance criteria:**
+
+- Running `electro init --endpoint <url> --token <token>` verifies authentication against the server and persists the configuration.
+- An LLM agent can execute `electro status --json` or `electro summary --range 24h --json` against a local or remote authenticated instance and receive accurate, structured JSON in under 15ms.
+- Unauthenticated requests to an exposed Electro server are rejected with HTTP 401 without leaking internal telemetry.
+- The CLI requires zero database files or Python dependencies on the client machine.
+- CLI handles network timeouts, offline servers, and authentication failures with clean error JSON envelopes rather than panics.
 
 ## 4. Proposed Information Architecture
 
@@ -306,6 +372,7 @@ Prioritize work in this order:
 1. Correctness and trustworthiness of captured data.
 2. Clear current status and historical source transitions.
 3. Useful energy and supply analytics.
-4. Balance forecasting after sufficient history.
-5. Alerts, backups, and operational polish.
-6. Optional advanced features only when a concrete need is demonstrated.
+4. LLM & Agentic Rust CLI (`electro`) for autonomous AI and terminal interaction.
+5. Balance forecasting after sufficient history.
+6. Alerts, backups, and operational polish.
+7. Optional advanced features only when a concrete need is demonstrated.

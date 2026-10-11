@@ -229,3 +229,107 @@ def test_api_health_endpoint(client, app_and_repo):
     assert "database" in data
     assert data["database"]["ok"] is True
 
+
+def test_api_export_csv_success(client, app_and_repo):
+    _, repo, _ = app_and_repo
+    repo.insert_snapshot({
+        "observed_at_utc": "2026-10-10T12:00:00Z",
+        "meter_id": 1042,
+        "device_id": "1042",
+        "meter_balance": 880.0,
+        "relay_status": "ON",
+        "kwh_rec_today": 10.0,
+        "kvah_rec_today": 11.0,
+        "kwh_del_today": 0.0,
+        "solar_today": 0.0,
+        "kvah_del_today": 0.0,
+        "kwh_rec_month": 100.0,
+        "kvah_rec_month": 110.0,
+        "kwh_del_month": 0.0,
+        "solar_month": 0.0,
+        "kvah_del_month": 0.0,
+        "current_day_eb": 50.0,
+        "current_day_dg": 0.0,
+        "current_day_solar": 0.0,
+        "fixed_charges_today": 5.0,
+        "current_month_eb": 500.0,
+        "current_month_dg": 0.0,
+        "current_month_solar": 0.0,
+        "fixed_charges_month": 50.0,
+        "is_eb": True,
+        "is_dg": False,
+        "is_solar": False,
+        "is_fixed_charge": True,
+        "is_coil_enable": True,
+        "eb_dg_status": 0,
+        "kwh_kvah_status": 1,
+        "meter_sn": None,
+    })
+
+    res = client.get("/api/export/csv?range=24h")
+    assert res.status_code == 200
+    assert "text/csv" in res.content_type
+    assert "attachment; filename=" in res.headers.get("Content-Disposition", "")
+    assert b"observed_at_utc,meter_id,power_source" in res.data
+    assert b"1042,Grid" in res.data
+
+
+def test_api_export_csv_invalid_range(client):
+    res = client.get("/api/export/csv?range=bad_range")
+    assert res.status_code == 400
+    data = res.get_json()
+    assert "error" in data
+
+
+def test_api_token_auth_enforced(tmp_path):
+    """Verify that when ELECTRO_API_TOKEN is configured, endpoints require authentication."""
+    db_file = tmp_path / "test_auth.db"
+    repo = SnapshotRepository(str(db_file))
+    repo.init_db()
+
+    app_with_auth = create_app(
+        test_config={
+            "TESTING": True,
+            "ELECTRO_DB_PATH": str(db_file),
+            "ELECTRO_API_TOKEN": "secret-test-token-12345",
+        },
+        start_poller=False,
+    )
+    auth_client = app_with_auth.test_client()
+
+    # 1. Unauthenticated request to /api/dashboard should fail with 401
+    res = auth_client.get("/api/dashboard")
+    assert res.status_code == 401
+    assert res.get_json()["error"] == "unauthorized"
+
+    # 2. Public /healthz probe remains accessible without token
+    res_healthz = auth_client.get("/healthz")
+    assert res_healthz.status_code == 200
+
+    # 3. Bad token should fail with 401
+    res_bad = auth_client.get(
+        "/api/dashboard",
+        headers={"Authorization": "Bearer wrong-token"},
+    )
+    assert res_bad.status_code == 401
+
+    # 4. Valid Authorization: Bearer <token> succeeds
+    res_bearer = auth_client.get(
+        "/api/dashboard",
+        headers={"Authorization": "Bearer secret-test-token-12345"},
+    )
+    assert res_bearer.status_code == 200
+
+    # 5. Valid X-Electro-Token succeeds
+    res_header = auth_client.get(
+        "/api/dashboard",
+        headers={"X-Electro-Token": "secret-test-token-12345"},
+    )
+    assert res_header.status_code == 200
+
+    # 6. Valid ?token= query parameter succeeds
+    res_query = auth_client.get(
+        "/api/dashboard?token=secret-test-token-12345"
+    )
+    assert res_query.status_code == 200
+

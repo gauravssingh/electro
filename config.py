@@ -78,6 +78,9 @@ class Config:
     ELECTRO_HOST: str = os.getenv("ELECTRO_HOST", "127.0.0.1")
     ELECTRO_PORT: int = int(os.getenv("ELECTRO_PORT", "5000"))
     ELECTRO_LOG_LEVEL: str = os.getenv("ELECTRO_LOG_LEVEL", "INFO").upper()
+    ELECTRO_API_TOKEN: Optional[str] = (
+        os.getenv("ELECTRO_API_TOKEN", "").strip() or None
+    )
 
     @classmethod
     def get_crypto_keys(cls) -> tuple:

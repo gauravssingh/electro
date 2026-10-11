@@ -22,6 +22,7 @@
 - **Telemetry & Health Probing**: Exposes `/healthz` for process liveness and `/api/health` for detailed telemetry age, failure counts, and 24h success rates.
 - **Independent Relay Telemetry**: Displays `RelStatus` independently as informational state without conflating it with the power source.
 - **Strictly Read-Only**: Zero upstream mutation calls. No relay toggling, no recharge flows, no order creation, and no profile modifications.
+- **Dual Interfaces (Web & LLM CLI)**: Interactive web dashboard for visual monitoring, paired with a planned standalone Rust CLI (`electro`) engineered for LLMs, autonomous AI agents, and terminal queries.
 - **Privacy by Default**: Bearer authentication tokens are stored strictly in-memory and never written to disk or logs. The web server binds exclusively to `127.0.0.1`.
 
 ---
@@ -29,13 +30,17 @@
 ## 🏗️ Architecture
 
 ```text
-macOS launchd (LaunchAgent: com.gauravs.electro)
-  │  Runs at login, restarts on crashes, logs to ~/Library/Logs/electro/
+Host Environment (macOS LaunchAgent or Linux / Raspberry Pi systemd)
+  │  Continuous background daemon (~35 MB RSS), self-healing, logs locally
   ▼
 Gunicorn / Flask Application (app.py)
+  ├── Dual Interfaces
+  │     ├── Web Browser ──────────► Web Dashboard (HTML / Tailwind / Chart.js)
+  │     └── LLMs & AI Agents ────► Rust CLI (electro) ──► REST API (:5000)
+  │                                (Local Mac or Remote Pi)
   ├── Services
-  │     ├── PollingService (Fixed monotonic cadence, non-blocking lock, exponential backoff)
-  │     ├── Analytics      (Elapsed-time duration calculations, transition detection, gap analysis)
+  │     ├── PollingService (Fixed monotonic cadence, non-blocking lock, backoff)
+  │     ├── Analytics      (Elapsed-time duration, transition detection, gap analysis)
   │     └── Normalization  (Clean data model & EBDGStatus / RelStatus mappers)
   │
   ├── Storage (storage/)
@@ -211,6 +216,7 @@ Future product phases, UX improvements, and analytical capabilities are document
 - **Phase 2 — Energy & Supply Analytics**: Daily consumption delta calculations, interval duration estimates, and CSV export.
 - **Phase 3 — Balance Intelligence**: Depletion rate estimation, threshold forecasting, and data coverage indicators.
 - **Phase 4 — Alerts & Operational Polish**: Local macOS notifications for stale capture or low balance, automated database backups, and settings configuration.
+- **Phase 5 — LLM & Agentic Interface (Rust CLI `electro`)**: Blazingly fast native CLI (<10ms) talking directly to the REST API with API token authentication (`ELECTRO_API_TOKEN`) and standalone configuration setup (`electro init`), enabling LLMs, autonomous agents (Hermes, Claude, Antigravity, MCP), and terminal queries against local or remote hosts (e.g. Raspberry Pi).
 
 > **Note:** The roadmap outlines proposed future product direction and does not imply that planned features are currently implemented. Refer to [docs/ROADMAP.md](docs/ROADMAP.md) for detailed phase criteria, calculation data contracts, and design principles.
 

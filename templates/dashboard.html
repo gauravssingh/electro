@@ -189,11 +189,22 @@
         <p class="text-xs text-slate-400">Balance reflects live deductions · Cyan series represents cumulative meter reading (not interval delta)</p>
       </div>
 
-      <!-- Time Range Selector -->
-      <div class="inline-flex rounded-lg bg-slate-900 p-1 border border-slate-700 text-xs font-medium">
-        <button type="button" class="range-btn px-3 py-1.5 rounded-md text-white bg-emerald-600 transition" data-range="24h">24 Hours</button>
-        <button type="button" class="range-btn px-3 py-1.5 rounded-md text-slate-400 hover:text-white transition" data-range="7d">7 Days</button>
-        <button type="button" class="range-btn px-3 py-1.5 rounded-md text-slate-400 hover:text-white transition" data-range="30d">30 Days</button>
+      <div class="flex flex-wrap items-center gap-3">
+        <!-- Time Range Selector -->
+        <div class="inline-flex rounded-lg bg-slate-900 p-1 border border-slate-700 text-xs font-medium">
+          <button type="button" class="range-btn px-3 py-1.5 rounded-md text-white bg-emerald-600 transition" data-range="24h">24 Hours</button>
+          <button type="button" class="range-btn px-3 py-1.5 rounded-md text-slate-400 hover:text-white transition" data-range="7d">7 Days</button>
+          <button type="button" class="range-btn px-3 py-1.5 rounded-md text-slate-400 hover:text-white transition" data-range="30d">30 Days</button>
+          <button type="button" class="range-btn px-3 py-1.5 rounded-md text-slate-400 hover:text-white transition" data-range="all">All</button>
+        </div>
+
+        <!-- Export CSV Button -->
+        <button id="export-csv-btn" type="button" title="Download snapshots in CSV format" class="inline-flex items-center px-3 py-1.5 rounded-lg bg-slate-800 hover:bg-slate-700 border border-slate-700 text-slate-300 hover:text-white text-xs font-medium transition shadow-sm focus:outline-none focus:ring-2 focus:ring-emerald-500">
+          <svg class="w-3.5 h-3.5 mr-1.5 text-emerald-400" fill="none" stroke="currentColor" viewBox="0 0 24 24">
+            <path stroke-linecap="round" stroke-linejoin="round" stroke-width="2" d="M4 16v1a3 3 0 003 3h10a3 3 0 003-3v-1m-4-4l-4 4m0 0l-4-4m4 4V4"></path>
+          </svg>
+          <span>Export CSV</span>
+        </button>
       </div>
     </div>
 

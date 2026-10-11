@@ -4,8 +4,10 @@ from typing import Optional, Dict, Any
 import logging
 import os
 import sys
+import hmac
+from datetime import datetime, timezone
 
-from flask import Flask, render_template, jsonify, request
+from flask import Flask, render_template, jsonify, request, Response
 
 from config import Config
 from elnet.client import ELNetClient
@@ -36,6 +38,7 @@ def create_app(
     # Default configuration
     app.config["ELECTRO_DB_PATH"] = Config.ELECTRO_DB_PATH
     app.config["ELECTRO_LOG_LEVEL"] = Config.ELECTRO_LOG_LEVEL
+    app.config["ELECTRO_API_TOKEN"] = Config.ELECTRO_API_TOKEN
     app.config["ELNET_BASE_URL"] = Config.ELNET_BASE_URL
     app.config["ELNET_USERNAME"] = Config.ELNET_USERNAME
     app.config["ELNET_PASSWORD"] = Config.ELNET_PASSWORD
@@ -84,12 +87,46 @@ def create_app(
     if poller and start_poller and not app.config.get("TESTING", False):
         poller.start()
 
+    # --- Authentication & Middleware ---
+
+    @app.before_request
+    def check_api_token():
+        """Enforce API token authentication on /api/* routes if configured."""
+        if not request.path.startswith("/api/"):
+            return None
+
+        expected_token = app.config.get("ELECTRO_API_TOKEN")
+        if not expected_token:
+            return None
+
+        # 1. Authorization: Bearer <token>
+        auth_header = request.headers.get("Authorization", "").strip()
+        provided_token = None
+        if auth_header.startswith("Bearer "):
+            provided_token = auth_header[7:].strip()
+        # 2. X-Electro-Token: <token>
+        elif "X-Electro-Token" in request.headers:
+            provided_token = request.headers.get("X-Electro-Token", "").strip()
+
+        # 3. Query parameter ?token= (for direct browser file downloads e.g. CSV)
+        if not provided_token:
+            provided_token = request.args.get("token", "").strip()
+
+        if not provided_token or not hmac.compare_digest(provided_token, expected_token):
+            return jsonify({
+                "error": "unauthorized",
+                "message": "Valid Bearer token or X-Electro-Token required",
+            }), 401
+
+        return None
+
     # --- HTTP Routes ---
 
     @app.route("/")
     def index():
         """Render dashboard HTML shell."""
-        return render_template("dashboard.html")
+        token = app.config.get("ELECTRO_API_TOKEN") or ""
+        return render_template("dashboard.html", api_token=token)
 
     @app.route("/api/dashboard")
     def api_dashboard():
@@ -205,6 +242,26 @@ def create_app(
             "transitions": analytics["transitions"],
             "analytics": analytics,
         })
+
+    @app.route("/api/export/csv")
+    def api_export_csv():
+        """Export historical snapshots in standard CSV format."""
+        range_str = request.args.get("range", "24h").lower()
+        if range_str not in SnapshotRepository.ALLOWED_RANGES:
+            return jsonify({
+                "error": f"Invalid range parameter '{range_str}'. Allowed ranges: {list(SnapshotRepository.ALLOWED_RANGES.keys())}"
+            }), 400
+
+        meter_id = app.poller.client.meter_id if (app.poller and app.poller.client) else None
+        csv_data = app.repository.export_snapshots_csv(meter_id=meter_id, range_str=range_str)
+
+        timestamp_str = datetime.now(timezone.utc).strftime("%Y%m%d_%H%M%S")
+        filename = f"electro_snapshots_{range_str}_{timestamp_str}.csv"
+
+        response = Response(csv_data, mimetype="text/csv; charset=utf-8")
+        response.headers["Content-Disposition"] = f'attachment; filename="{filename}"'
+        response.headers["Cache-Control"] = "no-cache, no-store, must-revalidate"
+        return response
 
     @app.route("/api/refresh", methods=["POST"])
     def api_refresh():

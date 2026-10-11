@@ -4,6 +4,14 @@ let currentRange = '24h';
 let historyChart = null;
 let pollTimer = null;
 
+function getAuthHeaders(existingHeaders = {}) {
+  const headers = { ...existingHeaders };
+  if (window.__ELECTRO_API_TOKEN__) {
+    headers['Authorization'] = `Bearer ${window.__ELECTRO_API_TOKEN__}`;
+  }
+  return headers;
+}
+
 function formatTimestamp(isoString) {
   if (!isoString) return '--';
   try {
@@ -160,7 +168,7 @@ function updateRelayStatus(relayStatus) {
 // Fetch dashboard snapshot and update DOM
 async function fetchDashboard() {
   try {
-    const res = await fetch('/api/dashboard');
+    const res = await fetch('/api/dashboard', { headers: getAuthHeaders() });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
 
@@ -231,7 +239,7 @@ function setFlagBadge(elementId, value) {
 // Fetch historical records and render chart, table, transitions, and analytics
 async function fetchHistory(range) {
   try {
-    const res = await fetch(`/api/history?range=${range}`);
+    const res = await fetch(`/api/history?range=${range}`, { headers: getAuthHeaders() });
     if (!res.ok) throw new Error(`HTTP ${res.status}`);
     const data = await res.json();
     const points = data.points || [];
@@ -509,7 +517,7 @@ async function triggerRefresh() {
   label.textContent = 'Refreshing...';
 
   try {
-    const res = await fetch('/api/refresh', { method: 'POST' });
+    const res = await fetch('/api/refresh', { method: 'POST', headers: getAuthHeaders() });
     const data = await res.json();
     if (!res.ok) {
       console.warn('Manual refresh notice:', data.error);
@@ -546,6 +554,18 @@ document.addEventListener('DOMContentLoaded', () => {
 
   // Bind refresh button
   document.getElementById('refresh-btn').addEventListener('click', triggerRefresh);
+
+  // Bind CSV export button
+  const exportBtn = document.getElementById('export-csv-btn');
+  if (exportBtn) {
+    exportBtn.addEventListener('click', () => {
+      let url = `/api/export/csv?range=${currentRange}`;
+      if (window.__ELECTRO_API_TOKEN__) {
+        url += `&token=${encodeURIComponent(window.__ELECTRO_API_TOKEN__)}`;
+      }
+      window.location.href = url;
+    });
+  }
 
   // Initial load
   fetchDashboard();

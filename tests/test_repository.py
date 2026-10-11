@@ -145,3 +145,61 @@ def test_record_poll_events_and_health_stats(repo):
     assert stats["last_failure"] is not None
     assert stats["last_failure"]["error_category"] == "network_error"
 
+
+def test_export_snapshots_csv(repo):
+    import csv
+    import io
+
+    now_str = datetime.now(timezone.utc).strftime("%Y-%m-%dT%H:%M:%SZ")
+    repo.insert_snapshot({
+        "observed_at_utc": now_str,
+        "meter_id": 1042,
+        "device_id": "1042",
+        "meter_balance": 999.5,
+        "relay_status": "ON",
+        "kwh_rec_today": 12.5,
+        "kvah_rec_today": 13.0,
+        "kwh_del_today": 0.0,
+        "solar_today": 0.0,
+        "kvah_del_today": 0.0,
+        "kwh_rec_month": 150.0,
+        "kvah_rec_month": 160.0,
+        "kwh_del_month": 0.0,
+        "solar_month": 0.0,
+        "kvah_del_month": 0.0,
+        "current_day_eb": 45.0,
+        "current_day_dg": 0.0,
+        "current_day_solar": 0.0,
+        "fixed_charges_today": 5.0,
+        "current_month_eb": 450.0,
+        "current_month_dg": 0.0,
+        "current_month_solar": 0.0,
+        "fixed_charges_month": 50.0,
+        "is_eb": True,
+        "is_dg": False,
+        "is_solar": False,
+        "is_fixed_charge": True,
+        "is_coil_enable": True,
+        "eb_dg_status": 0,
+        "kwh_kvah_status": 1,
+        "meter_sn": None,
+    })
+
+    # Test export for 24h
+    csv_str = repo.export_snapshots_csv(meter_id=1042, range_str="24h")
+    assert csv_str is not None
+    reader = csv.DictReader(io.StringIO(csv_str))
+    rows = list(reader)
+    assert len(rows) == 1
+    assert rows[0]["meter_id"] == "1042"
+    assert rows[0]["meter_balance"] == "999.5"
+    assert rows[0]["power_source"] == "Grid"
+    assert rows[0]["eb_dg_status"] == "0"
+    assert rows[0]["relay_status"] == "ON"
+    assert rows[0]["kwh_rec_today"] == "12.5"
+
+    # Test export for 'all' range
+    all_csv_str = repo.export_snapshots_csv(meter_id=1042, range_str="all")
+    all_rows = list(csv.DictReader(io.StringIO(all_csv_str)))
+    assert len(all_rows) == 1
+

@@ -58,6 +58,7 @@
     </div>
   </footer>
 
+  <script>window.__ELECTRO_API_TOKEN__ = {{ (api_token|default('', true)) | tojson }};</script>
   <script src="{{ url_for('static', filename='js/dashboard.js') }}"></script>
 </body>
 </html>

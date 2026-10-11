@@ -13,6 +13,7 @@ class SnapshotRepository:
         "24h": timedelta(hours=24),
         "7d": timedelta(days=7),
         "30d": timedelta(days=30),
+        "all": None,
     }
 
     def __init__(self, db_path: str):
@@ -103,10 +104,15 @@ class SnapshotRepository:
             raise ValueError(f"Invalid range '{range_str}'. Allowed values: {', '.join(self.ALLOWED_RANGES.keys())}")
 
         delta = self.ALLOWED_RANGES[range_str]
-        cutoff = (datetime.now(timezone.utc) - delta).strftime("%Y-%m-%dT%H:%M:%SZ")
+        params: List[Any] = []
 
-        sql = "SELECT * FROM snapshots WHERE observed_at_utc >= ?"
-        params: List[Any] = [cutoff]
+        if delta is not None:
+            cutoff = (datetime.now(timezone.utc) - delta).strftime("%Y-%m-%dT%H:%M:%SZ")
+            sql = "SELECT * FROM snapshots WHERE observed_at_utc >= ?"
+            params.append(cutoff)
+        else:
+            sql = "SELECT * FROM snapshots WHERE 1=1"
+
         if meter_id is not None:
             try:
                 params.append(int(meter_id))
@@ -118,6 +124,74 @@ class SnapshotRepository:
         with get_db_connection(self.db_path) as conn:
             rows = conn.execute(sql, params).fetchall()
             return [self._row_to_dict(r) for r in rows]
+
+    def export_snapshots_csv(
+        self,
+        meter_id: Optional[int] = None,
+        range_str: str = "24h",
+    ) -> str:
+        """Export historical snapshots in standard CSV format for data portability."""
+        import csv
+        import io
+
+        snapshots = self.get_history(meter_id=meter_id, range_str=range_str)
+
+        output = io.StringIO()
+        fieldnames = [
+            "observed_at_utc",
+            "meter_id",
+            "power_source",
+            "eb_dg_status",
+            "relay_status",
+            "meter_balance",
+            "kwh_rec_today",
+            "kwh_rec_month",
+            "current_day_eb",
+            "current_day_dg",
+            "current_day_solar",
+            "fixed_charges_today",
+            "current_month_eb",
+            "current_month_dg",
+            "current_month_solar",
+            "fixed_charges_month",
+            "is_eb",
+            "is_dg",
+            "attempted_at_utc",
+            "received_at_utc",
+            "persisted_at_utc",
+        ]
+        writer = csv.DictWriter(output, fieldnames=fieldnames, lineterminator="\n")
+        writer.writeheader()
+
+        for s in snapshots:
+            eb_dg = s.get("eb_dg_status")
+            power_source = "Grid" if eb_dg == 0 else "DG" if eb_dg == 1 else "Unknown"
+            row = {
+                "observed_at_utc": s.get("observed_at_utc"),
+                "meter_id": s.get("meter_id"),
+                "power_source": power_source,
+                "eb_dg_status": eb_dg,
+                "relay_status": s.get("relay_status"),
+                "meter_balance": s.get("meter_balance"),
+                "kwh_rec_today": s.get("kwh_rec_today"),
+                "kwh_rec_month": s.get("kwh_rec_month"),
+                "current_day_eb": s.get("current_day_eb"),
+                "current_day_dg": s.get("current_day_dg"),
+                "current_day_solar": s.get("current_day_solar"),
+                "fixed_charges_today": s.get("fixed_charges_today"),
+                "current_month_eb": s.get("current_month_eb"),
+                "current_month_dg": s.get("current_month_dg"),
+                "current_month_solar": s.get("current_month_solar"),
+                "fixed_charges_month": s.get("fixed_charges_month"),
+                "is_eb": s.get("is_eb"),
+                "is_dg": s.get("is_dg"),
+                "attempted_at_utc": s.get("attempted_at_utc"),
+                "received_at_utc": s.get("received_at_utc"),
+                "persisted_at_utc": s.get("persisted_at_utc"),
+            }
+            writer.writerow(row)
+
+        return output.getvalue()
 
     def count_snapshots(self, meter_id: Optional[int] = None) -> int:
         """Count total snapshot records."""
