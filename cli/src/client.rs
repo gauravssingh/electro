@@ -77,6 +77,25 @@ impl ElectroClient {
             .map_err(|e| format!("Failed to read CSV response: {}", e))
     }
 
+    pub fn get_forecast(&self, range: &str, threshold: Option<f64>) -> Result<crate::models::ForecastResponse, String> {
+        let mut path = format!("/api/forecast?range={}", range);
+        if let Some(t) = threshold {
+            path.push_str(&format!("&threshold={}", t));
+        }
+        let req = self.prepare_request(&path);
+        let resp = req.call().map_err(|e| self.handle_error(e))?;
+        resp.into_json::<crate::models::ForecastResponse>()
+            .map_err(|e| format!("Failed to parse forecast response: {}", e))
+    }
+
+    pub fn get_events(&self, limit: usize) -> Result<crate::models::EventsResponse, String> {
+        let path = format!("/api/events?limit={}", limit);
+        let req = self.prepare_request(&path);
+        let resp = req.call().map_err(|e| self.handle_error(e))?;
+        resp.into_json::<crate::models::EventsResponse>()
+            .map_err(|e| format!("Failed to parse events response: {}", e))
+    }
+
     pub fn refresh(&self) -> Result<serde_json::Value, String> {
         let url = format!("{}/api/refresh", self.config.endpoint);
         let mut req = self.agent.post(&url);

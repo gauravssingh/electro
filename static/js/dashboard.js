@@ -1,8 +1,11 @@
 // Electro Dashboard Frontend JavaScript
 
 let currentRange = '24h';
+let currentTab = 'overview';
 let historyChart = null;
 let pollTimer = null;
+let cachedEvents = [];
+let activeEventFilter = 'all';
 
 function getAuthHeaders(existingHeaders = {}) {
   const headers = { ...existingHeaders };
@@ -39,7 +42,46 @@ function formatKwh(val) {
   return Number(val).toFixed(2);
 }
 
-// Update connection header status indicator
+// ---------------------------------------------------------------------------
+// 4-View Tab Navigation
+// ---------------------------------------------------------------------------
+
+function switchTab(targetView) {
+  currentTab = targetView;
+  try {
+    localStorage.setItem('electro_active_tab', targetView);
+  } catch (e) {}
+
+  const tabButtons = document.querySelectorAll('.tab-btn');
+  tabButtons.forEach(btn => {
+    const view = btn.getAttribute('data-view');
+    if (view === targetView) {
+      btn.className = 'tab-btn px-4 py-2 rounded-lg text-sm font-bold flex items-center gap-2 transition border-b-2 border-emerald-500 text-emerald-400 bg-slate-800/80 shadow-sm';
+    } else {
+      btn.className = 'tab-btn px-4 py-2 rounded-lg text-sm font-medium flex items-center gap-2 transition text-slate-400 hover:text-white hover:bg-slate-800/40 border-b-2 border-transparent';
+    }
+  });
+
+  const panels = document.querySelectorAll('.view-panel');
+  panels.forEach(panel => {
+    if (panel.id === `view-${targetView}`) {
+      panel.classList.remove('hidden');
+    } else {
+      panel.classList.add('hidden');
+    }
+  });
+
+  if (targetView === 'analytics' && historyChart) {
+    setTimeout(() => {
+      historyChart.resize();
+    }, 50);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Connection & Active Status Header
+// ---------------------------------------------------------------------------
+
 function updateConnectionStatus(status, isStale, lastSuccess, errorCategory, errorMsg, ageSeconds, nextRetry, pollInterval) {
   const dot = document.getElementById('connection-dot');
   const text = document.getElementById('connection-text');
@@ -84,7 +126,10 @@ function updateConnectionStatus(status, isStale, lastSuccess, errorCategory, err
   }
 }
 
-// Update Active Power Source hero card based strictly on EBDGStatus
+// ---------------------------------------------------------------------------
+// Power Source Hero Indicator
+// ---------------------------------------------------------------------------
+
 function updatePowerSourceIndicator(ebDgStatus) {
   const heroCard = document.getElementById('power-source-hero');
   const iconEl = document.getElementById('source-badge-icon');
@@ -96,7 +141,6 @@ function updatePowerSourceIndicator(ebDgStatus) {
   const pillText = document.getElementById('source-pill-text');
 
   if (ebDgStatus === 0) {
-    // EBDGStatus == 0: Main Source / Grid (EB)
     heroCard.className = 'rounded-xl border p-5 shadow-lg flex flex-wrap items-center justify-between gap-4 transition bg-gradient-to-r from-emerald-950/70 via-slate-800/90 to-slate-800/80 border-emerald-500/50 shadow-emerald-950/20';
     iconEl.className = 'h-14 w-14 rounded-2xl flex items-center justify-center text-3xl bg-emerald-500/20 text-emerald-400 border border-emerald-500/40 shadow-inner';
     iconEl.textContent = '⚡';
@@ -110,7 +154,6 @@ function updatePowerSourceIndicator(ebDgStatus) {
     pillDot.className = 'h-2.5 w-2.5 rounded-full bg-emerald-400 shadow-sm shadow-emerald-400';
     pillText.textContent = 'Main Source (EB)';
   } else if (ebDgStatus === 1) {
-    // EBDGStatus == 1: Generator (DG)
     heroCard.className = 'rounded-xl border p-5 shadow-lg flex flex-wrap items-center justify-between gap-4 transition bg-gradient-to-r from-amber-950/80 via-slate-800/90 to-slate-800/80 border-amber-500/60 shadow-amber-950/30';
     iconEl.className = 'h-14 w-14 rounded-2xl flex items-center justify-center text-3xl bg-amber-500/20 text-amber-400 border border-amber-500/40 shadow-inner';
     iconEl.textContent = '⛽';
@@ -124,7 +167,6 @@ function updatePowerSourceIndicator(ebDgStatus) {
     pillDot.className = 'h-2.5 w-2.5 rounded-full bg-amber-400 shadow-sm shadow-amber-400';
     pillText.textContent = 'Generator (DG)';
   } else {
-    // EBDGStatus == null or any unexpected value
     heroCard.className = 'rounded-xl border p-5 shadow-sm flex flex-wrap items-center justify-between gap-4 transition bg-slate-800/80 border-slate-700';
     iconEl.className = 'h-14 w-14 rounded-2xl flex items-center justify-center text-3xl bg-slate-700 text-slate-400 border border-slate-600 shadow-inner';
     iconEl.textContent = '❓';
@@ -140,7 +182,6 @@ function updatePowerSourceIndicator(ebDgStatus) {
   }
 }
 
-// Update Relay Status independently from power source
 function updateRelayStatus(relayStatus) {
   const relayPill = document.getElementById('relay-pill');
   const metricRelay = document.getElementById('metric-relay');
@@ -165,7 +206,10 @@ function updateRelayStatus(relayStatus) {
   }
 }
 
-// Fetch dashboard snapshot and update DOM
+// ---------------------------------------------------------------------------
+// Telemetry Snapshots & Dashboard Data Fetch
+// ---------------------------------------------------------------------------
+
 async function fetchDashboard() {
   try {
     const res = await fetch('/api/dashboard', { headers: getAuthHeaders() });
@@ -185,35 +229,35 @@ async function fetchDashboard() {
 
     const snapshot = data.data;
     if (snapshot) {
-      // 1. Prominent Active Power Source Indicator (strictly from EBDGStatus)
       updatePowerSourceIndicator(snapshot.eb_dg_status);
-
-      // 2. Independent Relay Status
       updateRelayStatus(snapshot.relay_status);
 
-      // 3. Primary Cards
       document.getElementById('metric-balance').textContent = formatCurrency(snapshot.meter_balance);
       document.getElementById('metric-kwh-today').textContent = formatKwh(snapshot.kwh_rec_today);
-      document.getElementById('metric-kwh-month').textContent = formatKwh(snapshot.kwh_rec_month);
 
-      // 4. Charges breakdown
-      document.getElementById('charge-today-eb').textContent = snapshot.current_day_eb !== null ? `₹${formatCurrency(snapshot.current_day_eb)}` : '--';
-      document.getElementById('charge-today-dg').textContent = snapshot.current_day_dg !== null ? `₹${formatCurrency(snapshot.current_day_dg)}` : '--';
-      document.getElementById('charge-today-solar').textContent = snapshot.current_day_solar !== null ? `₹${formatCurrency(snapshot.current_day_solar)}` : '--';
-      document.getElementById('charge-today-fixed').textContent = snapshot.fixed_charges_today !== null ? `₹${formatCurrency(snapshot.fixed_charges_today)}` : '--';
+      // Charges breakdown (Supply view)
+      const setVal = (id, val) => {
+        const el = document.getElementById(id);
+        if (el) el.textContent = val !== null && val !== undefined ? `₹${formatCurrency(val)}` : '--';
+      };
+      setVal('charge-today-eb', snapshot.current_day_eb);
+      setVal('charge-today-dg', snapshot.current_day_dg);
+      setVal('charge-today-solar', snapshot.current_day_solar);
+      setVal('charge-today-fixed', snapshot.fixed_charges_today);
 
-      document.getElementById('charge-month-eb').textContent = snapshot.current_month_eb !== null ? `₹${formatCurrency(snapshot.current_month_eb)}` : '--';
-      document.getElementById('charge-month-dg').textContent = snapshot.current_month_dg !== null ? `₹${formatCurrency(snapshot.current_month_dg)}` : '--';
-      document.getElementById('charge-month-solar').textContent = snapshot.current_month_solar !== null ? `₹${formatCurrency(snapshot.current_month_solar)}` : '--';
-      document.getElementById('charge-month-fixed').textContent = snapshot.fixed_charges_month !== null ? `₹${formatCurrency(snapshot.fixed_charges_month)}` : '--';
+      setVal('charge-month-eb', snapshot.current_month_eb);
+      setVal('charge-month-dg', snapshot.current_month_dg);
+      setVal('charge-month-solar', snapshot.current_month_solar);
+      setVal('charge-month-fixed', snapshot.fixed_charges_month);
 
-      // 5. Source flags
+      // Flags (Supply view)
       setFlagBadge('flag-eb', snapshot.is_eb);
       setFlagBadge('flag-dg', snapshot.is_dg);
       setFlagBadge('flag-solar', snapshot.is_solar);
       setFlagBadge('flag-fixed', snapshot.is_fixed_charge);
 
-      document.getElementById('meter-id-label').textContent = snapshot.meter_id || '--';
+      const mIdEl = document.getElementById('meter-id-label');
+      if (mIdEl) mIdEl.textContent = snapshot.meter_id || '--';
     }
   } catch (err) {
     console.error('Failed to load dashboard:', err);
@@ -236,7 +280,155 @@ function setFlagBadge(elementId, value) {
   }
 }
 
-// Fetch historical records and render chart, table, transitions, and analytics
+// ---------------------------------------------------------------------------
+// Balance Runway & Burn Rate Forecasting (Phase 3 Intelligence)
+// ---------------------------------------------------------------------------
+
+async function fetchForecast(range = '24h') {
+  try {
+    const res = await fetch(`/api/forecast?range=${range}`, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const fc = await res.json();
+
+    // 1. Overview card metrics
+    const runwayDaysEl = document.getElementById('metric-runway-days');
+    const burnDailyEl = document.getElementById('metric-burn-daily');
+    const horizonSubEl = document.getElementById('metric-horizon-sub');
+
+    if (fc.runway_days !== null && fc.runway_days !== undefined) {
+      runwayDaysEl.textContent = fc.runway_days.toFixed(1);
+    } else {
+      runwayDaysEl.textContent = '--';
+    }
+
+    if (fc.daily_burn_rate > 0) {
+      burnDailyEl.textContent = `₹${fc.daily_burn_rate.toFixed(2)}/day`;
+    } else {
+      burnDailyEl.textContent = '--';
+    }
+
+    if (fc.days_to_threshold !== null && fc.days_to_threshold !== undefined) {
+      horizonSubEl.textContent = `> ₹500: ~${fc.days_to_threshold.toFixed(0)}d left`;
+    } else {
+      horizonSubEl.textContent = '';
+    }
+
+    // 2. Analytics view detailed forecast card
+    const rangeBadge = document.getElementById('forecast-range-badge');
+    if (rangeBadge) rangeBadge.textContent = range.toUpperCase();
+
+    const setEl = (id, text) => {
+      const el = document.getElementById(id);
+      if (el) el.textContent = text;
+    };
+
+    setEl('analytics-burn-hourly', fc.hourly_burn_rate > 0 ? `₹${fc.hourly_burn_rate.toFixed(2)}` : '--');
+    setEl('analytics-burn-daily', fc.daily_burn_rate > 0 ? `₹${fc.daily_burn_rate.toFixed(2)}` : '--');
+    setEl('analytics-runway-days', fc.runway_days !== null && fc.runway_days !== undefined ? `${fc.runway_days.toFixed(1)} days` : '--');
+    setEl('analytics-runway-hours', fc.runway_hours !== null && fc.runway_hours !== undefined ? `${fc.runway_hours.toFixed(0)} hours` : '--');
+
+    if (fc.days_to_threshold !== null && fc.days_to_threshold !== undefined) {
+      setEl('analytics-threshold-days', `${fc.days_to_threshold.toFixed(1)} days`);
+      setEl('analytics-threshold-date', fc.projected_threshold_utc ? formatTimestamp(fc.projected_threshold_utc) : '--');
+    } else {
+      setEl('analytics-threshold-days', '--');
+      setEl('analytics-threshold-date', '--');
+    }
+
+    setEl('analytics-depletion-date', fc.projected_depletion_utc ? formatTimestamp(fc.projected_depletion_utc) : '--');
+    setEl('analytics-sample-window', fc.sample_hours ? `${fc.sample_hours.toFixed(1)} hrs` : '--');
+    setEl('analytics-sample-count', fc.sample_points || 0);
+
+  } catch (err) {
+    console.error('Failed to load forecast:', err);
+  }
+}
+
+// ---------------------------------------------------------------------------
+// Unified Chronological Events Stream (Phase 2 Event Stream)
+// ---------------------------------------------------------------------------
+
+async function fetchEvents(limit = 100) {
+  try {
+    const res = await fetch(`/api/events?limit=${limit}`, { headers: getAuthHeaders() });
+    if (!res.ok) throw new Error(`HTTP ${res.status}`);
+    const data = await res.json();
+    cachedEvents = data.events || [];
+
+    const badge = document.getElementById('events-count-badge');
+    if (badge) badge.textContent = cachedEvents.length;
+
+    renderEventsTimeline(cachedEvents, activeEventFilter);
+  } catch (err) {
+    console.error('Failed to load events:', err);
+  }
+}
+
+function renderEventsTimeline(events, filterCategory = 'all') {
+  const container = document.getElementById('events-timeline-container');
+  if (!container) return;
+
+  let filtered = events;
+  if (filterCategory && filterCategory !== 'all') {
+    filtered = events.filter(e => e.category === filterCategory || (filterCategory === 'Power' && e.type === 'source_change'));
+  }
+
+  if (!filtered || filtered.length === 0) {
+    container.innerHTML = `
+      <div class="py-8 text-center text-slate-500 font-sans">
+        <span class="text-2xl block mb-2">📜</span>
+        <p class="font-medium">No events found in this category.</p>
+        <p class="text-xs text-slate-600 mt-1">Transitions, connection drops, and balance changes appear here automatically.</p>
+      </div>
+    `;
+    return;
+  }
+
+  container.innerHTML = filtered.map(ev => {
+    let borderClass = 'border-slate-800 bg-slate-900/70';
+    let badgeClass = 'bg-slate-800 text-slate-300 border-slate-700';
+    let icon = 'ℹ️';
+
+    if (ev.severity === 'alert') {
+      borderClass = 'border-rose-500/40 bg-rose-950/20';
+      badgeClass = 'bg-rose-950/80 text-rose-300 border-rose-600/50';
+      icon = '🚨';
+    } else if (ev.severity === 'warning') {
+      borderClass = 'border-amber-500/40 bg-amber-950/20';
+      badgeClass = 'bg-amber-950/80 text-amber-300 border-amber-600/50';
+      icon = '⚠️';
+    } else {
+      borderClass = 'border-emerald-500/30 bg-emerald-950/15';
+      badgeClass = 'bg-emerald-950/80 text-emerald-300 border-emerald-600/40';
+      icon = '⚡';
+    }
+
+    return `
+      <div class="p-3.5 rounded-xl border ${borderClass} flex flex-col sm:flex-row sm:items-center justify-between gap-2.5 transition hover:bg-slate-800/40">
+        <div class="flex items-start space-x-3">
+          <span class="text-xl mt-0.5">${icon}</span>
+          <div>
+            <div class="flex items-center gap-2">
+              <span class="font-semibold text-slate-100 text-sm">${ev.title}</span>
+              <span class="text-[10px] uppercase font-bold tracking-wider px-2 py-0.5 rounded-full border ${badgeClass}">
+                ${ev.category}
+              </span>
+            </div>
+            <p class="text-xs text-slate-400 mt-1">${ev.details}</p>
+          </div>
+        </div>
+        <div class="text-right sm:self-center flex sm:flex-col items-center sm:items-end justify-between text-[11px] text-slate-500 font-mono">
+          <span>${formatTimestamp(ev.timestamp)}</span>
+        </div>
+      </div>
+    `;
+  }).join('');
+}
+
+// ---------------------------------------------------------------------------
+// Historical Records, Chart & Analytics (Analytics & Supply Views)
+// ---------------------------------------------------------------------------
+
 async function fetchHistory(range) {
   try {
     const res = await fetch(`/api/history?range=${range}`, { headers: getAuthHeaders() });
@@ -247,7 +439,8 @@ async function fetchHistory(range) {
     const analytics = data.analytics || {};
 
     renderChart(points);
-    renderRecentTable(points);
+    renderRecentTable(points, 'recent-readings-tbody', 10);
+    renderRecentTable(points, 'overview-recent-tbody', 5);
     renderTransitions(transitions);
     renderAnalytics(analytics, range);
   } catch (err) {
@@ -260,7 +453,7 @@ function renderChart(points) {
   const canvas = document.getElementById('historyChart');
 
   if (!points || points.length < 2 || typeof Chart === 'undefined') {
-    emptyState.classList.remove('hidden');
+    if (emptyState) emptyState.classList.remove('hidden');
     if (historyChart) {
       historyChart.destroy();
       historyChart = null;
@@ -268,7 +461,7 @@ function renderChart(points) {
     return;
   }
 
-  emptyState.classList.add('hidden');
+  if (emptyState) emptyState.classList.add('hidden');
 
   const labels = points.map(p => formatTimestamp(p.observed_at_utc));
   const balanceData = points.map(p => p.meter_balance);
@@ -413,7 +606,6 @@ function renderAnalytics(analytics, range) {
   }
 }
 
-// Render source transitions in historical view
 function renderTransitions(transitions) {
   const container = document.getElementById('transitions-container');
   const badge = document.getElementById('transitions-count-badge');
@@ -428,7 +620,6 @@ function renderTransitions(transitions) {
     return;
   }
 
-  // Render transitions in chronological order
   container.innerHTML = transitions.map(t => {
     const isToGrid = t.to_code === 0;
     const isToDG = t.to_code === 1;
@@ -467,16 +658,16 @@ function renderTransitions(transitions) {
   }).join('');
 }
 
-// Render recent snapshot table with power source column
-function renderRecentTable(points) {
-  const tbody = document.getElementById('recent-readings-tbody');
+function renderRecentTable(points, tbodyId = 'recent-readings-tbody', limit = 10) {
+  const tbody = document.getElementById(tbodyId);
+  if (!tbody) return;
+
   if (!points || points.length === 0) {
     tbody.innerHTML = '<tr><td colspan="6" class="px-3 py-4 text-center text-slate-500 font-sans">No snapshots recorded yet.</td></tr>';
     return;
   }
 
-  // Display up to 10 latest snapshots in descending order
-  const recent = points.slice().reverse().slice(0, 10);
+  const recent = points.slice().reverse().slice(0, limit);
   tbody.innerHTML = recent.map(p => {
     let sourceBadge = '<span class="inline-flex px-2 py-0.5 rounded text-xs bg-slate-800 text-slate-400 border border-slate-700">Unknown</span>';
     if (p.eb_dg_status === 0) {
@@ -506,7 +697,10 @@ function renderRecentTable(points) {
   }).join('');
 }
 
-// Manual refresh trigger
+// ---------------------------------------------------------------------------
+// Manual Refresh Trigger
+// ---------------------------------------------------------------------------
+
 async function triggerRefresh() {
   const btn = document.getElementById('refresh-btn');
   const icon = document.getElementById('refresh-icon');
@@ -527,15 +721,60 @@ async function triggerRefresh() {
   } finally {
     await fetchDashboard();
     await fetchHistory(currentRange);
+    await fetchForecast(currentRange);
+    await fetchEvents();
     btn.disabled = false;
     icon.classList.remove('animate-spin');
     label.textContent = 'Refresh Now';
   }
 }
 
-// Initialize on page load
+// ---------------------------------------------------------------------------
+// Initialization on Page Load
+// ---------------------------------------------------------------------------
+
 document.addEventListener('DOMContentLoaded', () => {
-  // Bind range selector buttons
+  // 1. Tab buttons
+  const tabButtons = document.querySelectorAll('.tab-btn');
+  tabButtons.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const view = btn.getAttribute('data-view');
+      switchTab(view);
+    });
+  });
+
+  // Check URL hash or localStorage for active tab
+  const hash = window.location.hash.replace('#', '');
+  const savedTab = localStorage.getItem('electro_active_tab');
+  if (hash && ['overview', 'analytics', 'supply', 'history'].includes(hash)) {
+    switchTab(hash);
+  } else if (savedTab && ['overview', 'analytics', 'supply', 'history'].includes(savedTab)) {
+    switchTab(savedTab);
+  }
+
+  // Quick link in Overview to view full history
+  const overviewHistoryLink = document.getElementById('overview-view-all-history');
+  if (overviewHistoryLink) {
+    overviewHistoryLink.addEventListener('click', () => {
+      switchTab('history');
+    });
+  }
+
+  // 2. Event filter buttons
+  const filterBtns = document.querySelectorAll('.event-filter-btn');
+  filterBtns.forEach(btn => {
+    btn.addEventListener('click', () => {
+      const f = btn.getAttribute('data-filter');
+      activeEventFilter = f;
+      filterBtns.forEach(b => {
+        b.className = 'event-filter-btn px-3 py-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white border border-slate-700 font-medium transition';
+      });
+      btn.className = 'event-filter-btn px-3 py-1.5 rounded-lg bg-emerald-600 text-white font-medium transition';
+      renderEventsTimeline(cachedEvents, activeEventFilter);
+    });
+  });
+
+  // 3. Time range buttons
   const rangeButtons = document.querySelectorAll('.range-btn');
   rangeButtons.forEach(btn => {
     btn.addEventListener('click', () => {
@@ -549,13 +788,13 @@ document.addEventListener('DOMContentLoaded', () => {
 
       currentRange = selected;
       fetchHistory(currentRange);
+      fetchForecast(currentRange);
     });
   });
 
-  // Bind refresh button
+  // 4. Refresh & CSV Export
   document.getElementById('refresh-btn').addEventListener('click', triggerRefresh);
 
-  // Bind CSV export button
   const exportBtn = document.getElementById('export-csv-btn');
   if (exportBtn) {
     exportBtn.addEventListener('click', () => {
@@ -567,13 +806,17 @@ document.addEventListener('DOMContentLoaded', () => {
     });
   }
 
-  // Initial load
+  // Initial data loading
   fetchDashboard();
   fetchHistory(currentRange);
+  fetchForecast(currentRange);
+  fetchEvents();
 
-  // Auto-refresh UI state every 30 seconds
+  // Auto-refresh cycle (every 30 seconds)
   pollTimer = setInterval(() => {
     fetchDashboard();
     fetchHistory(currentRange);
+    fetchForecast(currentRange);
+    fetchEvents();
   }, 30000);
 });

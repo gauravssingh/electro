@@ -333,3 +333,61 @@ def test_api_token_auth_enforced(tmp_path):
     )
     assert res_query.status_code == 200
 
+
+def test_api_events(client, app_and_repo):
+    _, repo, _ = app_and_repo
+    repo.insert_snapshot({
+        "observed_at_utc": "2026-10-10T10:00:00Z",
+        "meter_id": 1042,
+        "eb_dg_status": 0,
+        "relay_status": "ON",
+        "meter_balance": 1000.0,
+    })
+    repo.insert_snapshot({
+        "observed_at_utc": "2026-10-10T10:15:00Z",
+        "meter_id": 1042,
+        "eb_dg_status": 1,
+        "relay_status": "ON",
+        "meter_balance": 980.0,
+    })
+
+    res = client.get("/api/events?limit=25")
+    assert res.status_code == 200
+    data = res.get_json()
+    assert "events" in data
+    assert "count" in data
+    assert data["limit"] == 25
+    assert len(data["events"]) == 1
+    assert data["events"][0]["type"] == "source_change"
+    assert data["events"][0]["severity"] == "alert"
+
+
+def test_api_forecast(client, app_and_repo):
+    from datetime import datetime, timezone, timedelta
+    _, repo, _ = app_and_repo
+    now = datetime.now(timezone.utc)
+    t1 = (now - timedelta(hours=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
+    t2 = now.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+    repo.insert_snapshot({
+        "observed_at_utc": t1,
+        "meter_id": 1042,
+        "meter_balance": 2000.0,
+    })
+    repo.insert_snapshot({
+        "observed_at_utc": t2,
+        "meter_id": 1042,
+        "meter_balance": 1950.0,
+    })
+
+    res = client.get("/api/forecast?range=24h&threshold=500")
+    assert res.status_code == 200
+    data = res.get_json()
+    assert data["status"] == "ok"
+    assert data["current_balance"] == 1950.0
+    assert data["hourly_burn_rate"] == 5.0
+    assert data["daily_burn_rate"] == 120.0
+    assert data["runway_hours"] == 390.0
+    assert data["runway_days"] == 16.2
+    assert data["low_balance_threshold"] == 500.0
+

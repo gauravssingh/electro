@@ -129,3 +129,39 @@ pub struct ApiError {
     pub error: Option<String>,
     pub message: Option<String>,
 }
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct ForecastResponse {
+    pub status: String,
+    pub current_balance: Option<f64>,
+    pub hourly_burn_rate: f64,
+    pub daily_burn_rate: f64,
+    pub runway_hours: Option<f64>,
+    pub runway_days: Option<f64>,
+    pub projected_depletion_utc: Option<String>,
+    pub projected_threshold_utc: Option<String>,
+    pub days_to_threshold: Option<f64>,
+    pub hours_to_threshold: Option<f64>,
+    pub low_balance_threshold: f64,
+    pub sample_hours: f64,
+    pub sample_points: usize,
+    pub range: Option<String>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct EventsResponse {
+    pub events: Vec<UnifiedEvent>,
+    pub count: usize,
+    pub limit: usize,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct UnifiedEvent {
+    pub id: String,
+    pub timestamp: String,
+    pub r#type: String,
+    pub category: String,
+    pub title: String,
+    pub details: String,
+    pub severity: String,
+}

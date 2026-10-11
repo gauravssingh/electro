@@ -32,6 +32,7 @@ class PollingService:
         password: str = "",
         fcm_token: str = "",
         poll_interval_seconds: int = 15,
+        notifier: Optional[Any] = None,
     ):
         self.client = client
         self.repository = repository
@@ -39,6 +40,7 @@ class PollingService:
         self.password = password
         self.fcm_token = fcm_token
         self.poll_interval_seconds = max(5, int(poll_interval_seconds))
+        self.notifier = notifier
 
         self._lock = threading.Lock()
         self._stop_event = threading.Event()
@@ -222,6 +224,11 @@ class PollingService:
             self.next_retry_at_utc = None
             self._backoff_until_monotonic = 0.0
             self.status = "connected"
+            if self.notifier:
+                try:
+                    self.notifier.on_snapshot(snapshot)
+                except Exception as n_err:
+                    logger.debug("Desktop notifier error on snapshot: %s", n_err)
             logger.info("Successfully captured snapshot for meter %s in %dms", target_meter_id, duration_ms)
             return True, snapshot, None
 
@@ -276,6 +283,12 @@ class PollingService:
                     backoff_delay,
                 )
 
+            if self.notifier:
+                try:
+                    self.notifier.on_poll_failure(self.consecutive_failures, e.message)
+                except Exception as n_err:
+                    logger.debug("Desktop notifier error on poll failure: %s", n_err)
+
             latest = self.repository.get_latest_snapshot(self.client.meter_id if self.client else None)
             return False, latest, e.message
 
@@ -301,6 +314,12 @@ class PollingService:
             retry_dt = datetime.now(timezone.utc) + timedelta(seconds=backoff_delay)
             self.next_retry_at_utc = retry_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
             logger.exception("Unexpected exception during fetch cycle")
+
+            if self.notifier:
+                try:
+                    self.notifier.on_poll_failure(self.consecutive_failures, str(e))
+                except Exception as n_err:
+                    logger.debug("Desktop notifier error on poll failure: %s", n_err)
 
             latest = self.repository.get_latest_snapshot(self.client.meter_id if self.client else None)
             return False, latest, "Unexpected application error"

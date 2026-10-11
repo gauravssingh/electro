@@ -203,3 +203,58 @@ def test_export_snapshots_csv(repo):
     all_rows = list(csv.DictReader(io.StringIO(all_csv_str)))
     assert len(all_rows) == 1
 
+
+def test_get_unified_events(repo):
+    # Snapshot 1: EB, Relay ON, Balance 1000
+    repo.insert_snapshot({
+        "observed_at_utc": "2026-10-10T10:00:00Z",
+        "meter_id": 1042,
+        "eb_dg_status": 0,
+        "relay_status": "ON",
+        "meter_balance": 1000.0,
+    })
+    # Snapshot 2: Outage switch to DG (1), Balance 980
+    repo.insert_snapshot({
+        "observed_at_utc": "2026-10-10T10:15:00Z",
+        "meter_id": 1042,
+        "eb_dg_status": 1,
+        "relay_status": "ON",
+        "meter_balance": 980.0,
+    })
+    # Snapshot 3: Restoration to EB (0), Relay tripped OFF, Balance dip to 450 (below 500)
+    repo.insert_snapshot({
+        "observed_at_utc": "2026-10-10T10:30:00Z",
+        "meter_id": 1042,
+        "eb_dg_status": 0,
+        "relay_status": "OFF",
+        "meter_balance": 450.0,
+    })
+    # Snapshot 4: Recharge (+550) to 1000
+    repo.insert_snapshot({
+        "observed_at_utc": "2026-10-10T10:45:00Z",
+        "meter_id": 1042,
+        "eb_dg_status": 0,
+        "relay_status": "ON",
+        "meter_balance": 1000.0,
+    })
+
+    # Poll events: success -> failure -> success (drop and recovery)
+    repo.record_poll_event("2026-10-10T10:00:00Z", success=True, duration_ms=250)
+    repo.record_poll_event("2026-10-10T10:05:00Z", success=False, duration_ms=5000, error_category="network_error", error_message="Timeout")
+    repo.record_poll_event("2026-10-10T10:10:00Z", success=True, duration_ms=300)
+
+    events = repo.get_unified_events(limit=50)
+
+    # Check that events contain source changes, relay changes, balance changes, drops, and recoveries
+    types = [e["type"] for e in events]
+    assert "source_change" in types
+    assert "relay_change" in types
+    assert "balance_recharge" in types
+    assert "low_balance" in types
+    assert "connection_drop" in types
+    assert "connection_recovery" in types
+
+    # Chronological sort: newest timestamp should be first
+    timestamps = [e["timestamp"] for e in events]
+    assert timestamps == sorted(timestamps, reverse=True)
+

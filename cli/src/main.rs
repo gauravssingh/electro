@@ -54,6 +54,12 @@ enum Commands {
 
     /// Export historical telemetry snapshots in standard CSV format
     Export(ExportArgs),
+
+    /// Compute burn rate (₹/hr & ₹/day), balance runway days, and depletion horizon
+    Forecast(ForecastArgs),
+
+    /// Display chronological unified event stream (outages, drops, recoveries, recharges)
+    Events(EventsArgs),
 }
 
 #[derive(Args)]
@@ -94,6 +100,24 @@ struct ExportArgs {
     /// Destination file path (prints to stdout if omitted)
     #[arg(short, long)]
     output: Option<String>,
+}
+
+#[derive(Args)]
+struct ForecastArgs {
+    /// Time range to base burn rate calculation on (24h, 7d, 30d, all)
+    #[arg(short, long, default_value = "24h")]
+    range: String,
+
+    /// Low balance alert threshold in INR (defaults to server configuration, typically 500)
+    #[arg(short, long)]
+    threshold: Option<f64>,
+}
+
+#[derive(Args)]
+struct EventsArgs {
+    /// Maximum number of events to display
+    #[arg(short, long, default_value_t = 25)]
+    limit: usize,
 }
 
 fn format_duration_mins(mins: f64) -> String {
@@ -150,6 +174,16 @@ fn main() {
             let config = Config::load(cli.endpoint, cli.token);
             let client = ElectroClient::new(config);
             handle_export(&client, &args.range, args.output.as_deref());
+        }
+        Commands::Forecast(args) => {
+            let config = Config::load(cli.endpoint, cli.token);
+            let client = ElectroClient::new(config);
+            handle_forecast(&client, &args.range, args.threshold, as_json);
+        }
+        Commands::Events(args) => {
+            let config = Config::load(cli.endpoint, cli.token);
+            let client = ElectroClient::new(config);
+            handle_events(&client, args.limit, as_json);
         }
     }
 }
@@ -463,6 +497,100 @@ fn handle_export(client: &ElectroClient, range: &str, output_path: Option<&str>)
         }
         Err(e) => {
             eprintln!("{}", e);
+            std::process::exit(1);
+        }
+    }
+}
+
+fn handle_forecast(client: &ElectroClient, range: &str, threshold: Option<f64>, as_json: bool) {
+    match client.get_forecast(range, threshold) {
+        Ok(fc) => {
+            if as_json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&fc).unwrap_or_else(|_| "{}".to_string())
+                );
+            } else {
+                println!("⚡ Electro Balance Runway Forecast ({})", fc.range.as_deref().unwrap_or(range));
+                println!("──────────────────────────────────────────────");
+                if let Some(bal) = fc.current_balance {
+                    println!("Current Balance:     ₹{:.2}", bal);
+                } else {
+                    println!("Current Balance:     --");
+                }
+                println!("Hourly Burn Rate:    ₹{:.2} / hr", fc.hourly_burn_rate);
+                println!("Daily Burn Rate:     ₹{:.2} / day", fc.daily_burn_rate);
+
+                if let (Some(days), Some(hrs)) = (fc.runway_days, fc.runway_hours) {
+                    println!("Estimated Runway:    {:.1} days ({:.1} hrs)", days, hrs);
+                } else {
+                    println!("Estimated Runway:    --");
+                }
+
+                if let Some(dep) = &fc.projected_depletion_utc {
+                    println!("Projected Depletion: {}", dep);
+                }
+
+                if let (Some(days_th), Some(hrs_th)) = (fc.days_to_threshold, fc.hours_to_threshold) {
+                    let th_utc = fc.projected_threshold_utc.as_deref().unwrap_or("--");
+                    println!(
+                        "Warning Horizon (< ₹{:.0}): {:.1} days ({:.1} hrs · {})",
+                        fc.low_balance_threshold, days_th, hrs_th, th_utc
+                    );
+                }
+
+                println!(
+                    "Sample Window:       {:.1} hrs ({} snapshots)",
+                    fc.sample_hours, fc.sample_points
+                );
+            }
+        }
+        Err(e) => {
+            if as_json {
+                println!("{}", json!({ "error": "forecast_failed", "message": e }));
+            } else {
+                eprintln!("{}", e);
+            }
+            std::process::exit(1);
+        }
+    }
+}
+
+fn handle_events(client: &ElectroClient, limit: usize, as_json: bool) {
+    match client.get_events(limit) {
+        Ok(res) => {
+            if as_json {
+                println!(
+                    "{}",
+                    serde_json::to_string_pretty(&res).unwrap_or_else(|_| "{}".to_string())
+                );
+            } else {
+                println!("📜 Electro Chronological Event Stream (Latest {})", res.events.len());
+                println!("──────────────────────────────────────────────");
+                if res.events.is_empty() {
+                    println!("No transitions or system events recorded.");
+                    return;
+                }
+                for ev in &res.events {
+                    let badge = match ev.severity.as_str() {
+                        "alert" => "🚨",
+                        "warning" => "⚠️",
+                        _ => "ℹ️",
+                    };
+                    println!(
+                        "{} [{}] [{}] {}",
+                        badge, ev.timestamp, ev.category, ev.title
+                    );
+                    println!("   └─ {}", ev.details);
+                }
+            }
+        }
+        Err(e) => {
+            if as_json {
+                println!("{}", json!({ "error": "events_failed", "message": e }));
+            } else {
+                eprintln!("{}", e);
+            }
             std::process::exit(1);
         }
     }

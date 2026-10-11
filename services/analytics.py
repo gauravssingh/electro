@@ -190,3 +190,139 @@ def compute_source_duration_analytics(
         "kwh_end": kwh_end,
         "consumption_kwh": consumption_kwh,
     }
+
+
+def compute_balance_forecast(
+    points: List[Dict[str, Any]],
+    low_balance_threshold: float = 500.0,
+) -> Dict[str, Any]:
+    """Calculate hourly/daily burn rate, projected runway, and low-balance horizon.
+
+    Recharge-resilient: Ignores upward balance jumps (top-ups) so burn rate reflects
+    actual power consumption rate rather than net delta.
+    """
+    from datetime import timedelta
+
+    thresh = float(low_balance_threshold)
+
+    valid_points = []
+    for p in points:
+        b = p.get("meter_balance")
+        ts = p.get("observed_at_utc")
+        if b is not None and ts:
+            try:
+                valid_points.append({
+                    "balance": float(b),
+                    "timestamp": parse_timestamp_utc(ts),
+                    "iso": ts,
+                })
+            except (ValueError, TypeError):
+                pass
+
+    if len(valid_points) < 2:
+        curr_bal = valid_points[-1]["balance"] if valid_points else None
+        return {
+            "status": "insufficient_data",
+            "current_balance": curr_bal,
+            "hourly_burn_rate": 0.0,
+            "daily_burn_rate": 0.0,
+            "runway_hours": None,
+            "runway_days": None,
+            "projected_depletion_utc": None,
+            "projected_threshold_utc": None,
+            "days_to_threshold": None,
+            "hours_to_threshold": None,
+            "low_balance_threshold": thresh,
+            "sample_hours": 0.0,
+            "sample_points": len(valid_points),
+        }
+
+    t_first = valid_points[0]["timestamp"]
+    t_last = valid_points[-1]["timestamp"]
+    total_hours = (t_last - t_first).total_seconds() / 3600.0
+
+    if total_hours < 0.05:  # Less than 3 minutes
+        return {
+            "status": "insufficient_data",
+            "current_balance": valid_points[-1]["balance"],
+            "hourly_burn_rate": 0.0,
+            "daily_burn_rate": 0.0,
+            "runway_hours": None,
+            "runway_days": None,
+            "projected_depletion_utc": None,
+            "projected_threshold_utc": None,
+            "days_to_threshold": None,
+            "hours_to_threshold": None,
+            "low_balance_threshold": thresh,
+            "sample_hours": round(total_hours, 2),
+            "sample_points": len(valid_points),
+        }
+
+    total_consumed = 0.0
+    valid_hours = 0.0
+
+    for i in range(len(valid_points) - 1):
+        p1 = valid_points[i]
+        p2 = valid_points[i + 1]
+        dt_hr = (p2["timestamp"] - p1["timestamp"]).total_seconds() / 3600.0
+        if dt_hr <= 0:
+            continue
+
+        valid_hours += dt_hr
+        b1 = p1["balance"]
+        b2 = p2["balance"]
+
+        if b1 > b2:
+            drop = b1 - b2
+            if drop < 10000.0:  # Exclude corrupt spikes
+                total_consumed += drop
+
+    if valid_hours > 0 and total_consumed > 0:
+        hourly_burn = round(total_consumed / valid_hours, 3)
+        daily_burn = round(hourly_burn * 24.0, 2)
+    else:
+        hourly_burn = 0.0
+        daily_burn = 0.0
+
+    curr_bal = valid_points[-1]["balance"]
+    runway_hours = None
+    runway_days = None
+    projected_depletion = None
+    hours_to_thresh = None
+    days_to_thresh = None
+    projected_thresh = None
+
+    if hourly_burn > 0:
+        status = "ok"
+        runway_hours = round(curr_bal / hourly_burn, 1)
+        runway_days = round(runway_hours / 24.0, 1)
+        depletion_dt = t_last + timedelta(hours=runway_hours)
+        projected_depletion = depletion_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+
+        if curr_bal <= thresh:
+            hours_to_thresh = 0.0
+            days_to_thresh = 0.0
+            projected_thresh = valid_points[-1]["iso"]
+        else:
+            hours_to_thresh = round((curr_bal - thresh) / hourly_burn, 1)
+            days_to_thresh = round(hours_to_thresh / 24.0, 1)
+            thresh_dt = t_last + timedelta(hours=hours_to_thresh)
+            projected_thresh = thresh_dt.strftime("%Y-%m-%dT%H:%M:%SZ")
+    else:
+        status = "zero_burn"
+
+    return {
+        "status": status,
+        "current_balance": curr_bal,
+        "hourly_burn_rate": hourly_burn,
+        "daily_burn_rate": daily_burn,
+        "runway_hours": runway_hours,
+        "runway_days": runway_days,
+        "projected_depletion_utc": projected_depletion,
+        "projected_threshold_utc": projected_thresh,
+        "days_to_threshold": days_to_thresh,
+        "hours_to_threshold": hours_to_thresh,
+        "low_balance_threshold": thresh,
+        "sample_hours": round(total_hours, 2),
+        "sample_points": len(valid_points),
+    }

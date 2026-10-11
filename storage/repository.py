@@ -72,6 +72,16 @@ class SnapshotRepository:
             val = params.get(bool_key)
             params[bool_key] = int(val) if val is not None else None
 
+        for col in (
+            "device_id", "meter_balance", "relay_status",
+            "kwh_rec_today", "kvah_rec_today", "kwh_del_today", "solar_today", "kvah_del_today",
+            "kwh_rec_month", "kvah_rec_month", "kwh_del_month", "solar_month", "kvah_del_month",
+            "current_day_eb", "current_day_dg", "current_day_solar", "fixed_charges_today",
+            "current_month_eb", "current_month_dg", "current_month_solar", "fixed_charges_month",
+            "eb_dg_status", "kwh_kvah_status", "meter_sn",
+        ):
+            params.setdefault(col, None)
+
         with get_db_connection(self.db_path) as conn:
             cursor = conn.execute(sql, params)
             return cursor.lastrowid
@@ -247,6 +257,177 @@ class SnapshotRepository:
         with get_db_connection(self.db_path) as conn:
             rows = conn.execute(sql, (limit,)).fetchall()
             return [dict(r) for r in rows]
+
+    def get_unified_events(
+        self,
+        limit: int = 50,
+        meter_id: Optional[int] = None,
+    ) -> List[Dict[str, Any]]:
+        """Extract a chronological timeline of significant system events.
+
+        Detects and returns:
+        - Power source transitions (Grid <-> DG)
+        - Relay state changes (ON <-> OFF)
+        - Upstream connection drops and recoveries
+        - Prepaid balance recharges and low-balance warnings
+        """
+        events: List[Dict[str, Any]] = []
+
+        with get_db_connection(self.db_path) as conn:
+            # 1. State transitions from snapshots
+            snap_sql = """
+                SELECT id, observed_at_utc, meter_id, eb_dg_status, relay_status, meter_balance
+                FROM snapshots
+            """
+            params: List[Any] = []
+            if meter_id is not None:
+                try:
+                    params.append(int(meter_id))
+                    snap_sql += " WHERE meter_id = ?"
+                except (ValueError, TypeError):
+                    pass
+            snap_sql += " ORDER BY id DESC LIMIT 5000;"
+
+            snap_rows = conn.execute(snap_sql, params).fetchall()
+            snapshots = list(reversed(snap_rows))
+
+            prev_eb_dg = None
+            prev_relay = None
+            prev_balance = None
+
+            for s in snapshots:
+                ts = s["observed_at_utc"]
+                eb_dg = s["eb_dg_status"]
+                relay = s["relay_status"]
+                balance = s["meter_balance"]
+
+                # Source transition
+                if eb_dg is not None and prev_eb_dg is not None and eb_dg != prev_eb_dg:
+                    if eb_dg == 1:
+                        events.append({
+                            "id": f"src-{s['id']}",
+                            "timestamp": ts,
+                            "type": "source_change",
+                            "category": "Power",
+                            "title": "Switched to Backup Generator (DG)",
+                            "details": "Outage detected on main grid; DG backup power active.",
+                            "severity": "alert",
+                        })
+                    elif eb_dg == 0:
+                        events.append({
+                            "id": f"src-{s['id']}",
+                            "timestamp": ts,
+                            "type": "source_change",
+                            "category": "Power",
+                            "title": "Power Restored (Main Grid)",
+                            "details": "Grid (EB) electricity supply restored.",
+                            "severity": "info",
+                        })
+
+                # Relay transition
+                if relay is not None and prev_relay is not None and relay != prev_relay:
+                    if str(relay).upper() in ("OFF", "0", "DISCONNECTED"):
+                        events.append({
+                            "id": f"rel-{s['id']}",
+                            "timestamp": ts,
+                            "type": "relay_change",
+                            "category": "Relay",
+                            "title": "Relay Disconnected",
+                            "details": f"Relay status changed from {prev_relay} to {relay}.",
+                            "severity": "alert",
+                        })
+                    else:
+                        events.append({
+                            "id": f"rel-{s['id']}",
+                            "timestamp": ts,
+                            "type": "relay_change",
+                            "category": "Relay",
+                            "title": "Relay Reconnected",
+                            "details": f"Relay status changed from {prev_relay} to {relay}.",
+                            "severity": "info",
+                        })
+
+                # Balance recharge & low balance
+                if balance is not None and prev_balance is not None:
+                    try:
+                        b_curr = float(balance)
+                        b_prev = float(prev_balance)
+                        if b_curr - b_prev >= 20.0:
+                            events.append({
+                                "id": f"bal-{s['id']}",
+                                "timestamp": ts,
+                                "type": "balance_recharge",
+                                "category": "Billing",
+                                "title": f"Balance Recharged (+₹{b_curr - b_prev:.2f})",
+                                "details": f"Prepaid credit increased from ₹{b_prev:.2f} to ₹{b_curr:.2f}.",
+                                "severity": "info",
+                            })
+                        elif b_prev >= 500.0 and b_curr < 500.0:
+                            events.append({
+                                "id": f"bal-{s['id']}",
+                                "timestamp": ts,
+                                "type": "low_balance",
+                                "category": "Billing",
+                                "title": "Low Balance Threshold Reached",
+                                "details": f"Prepaid balance dipped to ₹{b_curr:.2f} (below ₹500 threshold).",
+                                "severity": "warning",
+                            })
+                    except (ValueError, TypeError):
+                        pass
+
+                prev_eb_dg = eb_dg
+                prev_relay = relay
+                prev_balance = balance
+
+            # 2. Connection drops & recoveries from poll_events
+            poll_sql = """
+                SELECT id, attempted_at_utc, success, duration_ms, error_category, error_message
+                FROM poll_events
+                ORDER BY id DESC LIMIT 5000;
+            """
+            poll_rows = conn.execute(poll_sql).fetchall()
+            poll_events = list(reversed(poll_rows))
+
+            prev_success = None
+            in_failure_streak = False
+
+            for p in poll_events:
+                ts = p["attempted_at_utc"]
+                succ = bool(p["success"])
+                err_msg = p["error_message"] or "Unable to reach meter telemetry."
+                err_cat = p["error_category"] or "network_error"
+
+                if prev_success is not None:
+                    # Connection dropped
+                    if prev_success and not succ:
+                        in_failure_streak = True
+                        events.append({
+                            "id": f"poll-{p['id']}",
+                            "timestamp": ts,
+                            "type": "connection_drop",
+                            "category": "Network",
+                            "title": "Connection Dropped",
+                            "details": f"Upstream poll failed: {err_msg} ({err_cat}).",
+                            "severity": "warning",
+                        })
+                    # Connection recovered
+                    elif not prev_success and succ and in_failure_streak:
+                        in_failure_streak = False
+                        events.append({
+                            "id": f"poll-{p['id']}",
+                            "timestamp": ts,
+                            "type": "connection_recovery",
+                            "category": "Network",
+                            "title": "Connection Restored",
+                            "details": "Telemetry communication restored successfully.",
+                            "severity": "info",
+                        })
+
+                prev_success = succ
+
+        # Sort all events chronologically newest first
+        events.sort(key=lambda x: x["timestamp"], reverse=True)
+        return events[:max(1, limit)]
 
     def get_poll_health_stats(self, hours: int = 24) -> Dict[str, Any]:
         """Compute poll reliability metrics over the specified recent window."""

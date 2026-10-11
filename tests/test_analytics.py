@@ -129,3 +129,61 @@ def test_analytics_balance_and_consumption_deltas():
     assert res["kwh_start"] == 120.5
     assert res["kwh_end"] == 122.0
     assert res["consumption_kwh"] == 1.5
+
+
+def test_balance_forecast_insufficient_data():
+    from services.analytics import compute_balance_forecast
+    assert compute_balance_forecast([])["status"] == "insufficient_data"
+    assert compute_balance_forecast([{"observed_at_utc": "2026-10-10T12:00:00Z", "meter_balance": 1000.0}])["status"] == "insufficient_data"
+
+
+def test_balance_forecast_normal_consumption():
+    from services.analytics import compute_balance_forecast
+    points = [
+        {"observed_at_utc": "2026-10-10T00:00:00Z", "meter_balance": 2000.0},
+        {"observed_at_utc": "2026-10-10T10:00:00Z", "meter_balance": 1950.0},
+    ]
+    res = compute_balance_forecast(points, low_balance_threshold=500.0)
+
+    assert res["status"] == "ok"
+    assert res["current_balance"] == 1950.0
+    assert res["hourly_burn_rate"] == 5.0
+    assert res["daily_burn_rate"] == 120.0
+    assert res["runway_hours"] == 390.0
+    assert res["runway_days"] == 16.2
+    assert res["hours_to_threshold"] == 290.0
+    assert res["days_to_threshold"] == 12.1
+    assert res["projected_depletion_utc"] == "2026-10-26T16:00:00Z"
+
+
+def test_balance_forecast_recharge_resilience():
+    from services.analytics import compute_balance_forecast
+    points = [
+        {"observed_at_utc": "2026-10-10T00:00:00Z", "meter_balance": 1000.0},
+        {"observed_at_utc": "2026-10-10T05:00:00Z", "meter_balance": 975.0},    # 25 spent over 5h
+        {"observed_at_utc": "2026-10-10T05:01:00Z", "meter_balance": 2000.0},   # +1025 recharge
+        {"observed_at_utc": "2026-10-10T10:00:00Z", "meter_balance": 1975.0},   # 25 spent over ~5h
+    ]
+    res = compute_balance_forecast(points, low_balance_threshold=500.0)
+
+    assert res["status"] == "ok"
+    assert res["current_balance"] == 1975.0
+    assert round(res["hourly_burn_rate"], 1) == 5.0  # 50 total spent over 10h
+    assert res["daily_burn_rate"] == 120.0
+    assert res["runway_hours"] == 395.0
+
+
+def test_balance_forecast_already_below_threshold():
+    from services.analytics import compute_balance_forecast
+    points = [
+        {"observed_at_utc": "2026-10-10T00:00:00Z", "meter_balance": 450.0},
+        {"observed_at_utc": "2026-10-10T05:00:00Z", "meter_balance": 400.0},
+    ]
+    res = compute_balance_forecast(points, low_balance_threshold=500.0)
+
+    assert res["status"] == "ok"
+    assert res["current_balance"] == 400.0
+    assert res["hourly_burn_rate"] == 10.0
+    assert res["hours_to_threshold"] == 0.0
+    assert res["days_to_threshold"] == 0.0
+    assert res["projected_threshold_utc"] == "2026-10-10T05:00:00Z"

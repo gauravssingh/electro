@@ -14,8 +14,9 @@ from elnet.client import ELNetClient
 from elnet.schemas import ErrorCategory
 from storage.repository import SnapshotRepository
 from services.polling import PollingService
+from services.notifications import NotificationService
 from services.normalization import map_power_source, map_relay_status
-from services.analytics import compute_source_duration_analytics
+from services.analytics import compute_source_duration_analytics, compute_balance_forecast
 
 
 def setup_logging(log_level_name: str) -> None:
@@ -39,6 +40,9 @@ def create_app(
     app.config["ELECTRO_DB_PATH"] = Config.ELECTRO_DB_PATH
     app.config["ELECTRO_LOG_LEVEL"] = Config.ELECTRO_LOG_LEVEL
     app.config["ELECTRO_API_TOKEN"] = Config.ELECTRO_API_TOKEN
+    app.config["ELECTRO_NOTIFICATIONS_ENABLED"] = Config.ELECTRO_NOTIFICATIONS_ENABLED
+    app.config["ELECTRO_LOW_BALANCE_THRESHOLD"] = Config.ELECTRO_LOW_BALANCE_THRESHOLD
+    app.config["ELECTRO_STALE_ALERT_THRESHOLD_FAILURES"] = Config.ELECTRO_STALE_ALERT_THRESHOLD_FAILURES
     app.config["ELNET_BASE_URL"] = Config.ELNET_BASE_URL
     app.config["ELNET_USERNAME"] = Config.ELNET_USERNAME
     app.config["ELNET_PASSWORD"] = Config.ELNET_PASSWORD
@@ -57,9 +61,15 @@ def create_app(
     repo.init_db()
     app.repository = repo
 
-    # Initialize client and polling service if keys configured
+    # Initialize client, notification service, and polling service if keys configured
     poller = None
+    notifier = None
     try:
+        notifier = NotificationService(
+            enabled=app.config["ELECTRO_NOTIFICATIONS_ENABLED"],
+            low_balance_threshold=app.config["ELECTRO_LOW_BALANCE_THRESHOLD"],
+            stale_failure_threshold=app.config["ELECTRO_STALE_ALERT_THRESHOLD_FAILURES"],
+        )
         skey, ivkey = Config.get_crypto_keys()
         client = ELNetClient(
             base_url=app.config["ELNET_BASE_URL"],
@@ -74,6 +84,7 @@ def create_app(
             password=app.config["ELNET_PASSWORD"],
             fcm_token=app.config["ELNET_FCM_TOKEN"],
             poll_interval_seconds=app.config["ELNET_POLL_INTERVAL_SECONDS"],
+            notifier=notifier,
         )
     except Exception as e:
         logger.warning("ELNet client/poller initialization deferred: %s", str(e))
@@ -83,6 +94,7 @@ def create_app(
         poller = app.config["POLLING_SERVICE"]
 
     app.poller = poller
+    app.notifier = getattr(poller, "notifier", notifier)
 
     if poller and start_poller and not app.config.get("TESTING", False):
         poller.start()
@@ -242,6 +254,48 @@ def create_app(
             "transitions": analytics["transitions"],
             "analytics": analytics,
         })
+
+    @app.route("/api/events")
+    def api_events():
+        """Return a chronological unified event stream of system transitions."""
+        limit_param = request.args.get("limit", "50")
+        try:
+            limit = int(limit_param)
+            limit = max(1, min(limit, 200))
+        except (ValueError, TypeError):
+            limit = 50
+
+        meter_id = app.poller.client.meter_id if (app.poller and app.poller.client) else None
+        events = app.repository.get_unified_events(limit=limit, meter_id=meter_id)
+        return jsonify({
+            "events": events,
+            "count": len(events),
+            "limit": limit,
+        })
+
+    @app.route("/api/forecast")
+    def api_forecast():
+        """Compute balance burn rate, runway projection, and depletion horizon."""
+        range_str = request.args.get("range", "24h").lower()
+        if range_str not in SnapshotRepository.ALLOWED_RANGES:
+            return jsonify({
+                "error": f"Invalid range parameter '{range_str}'. Allowed ranges: {list(SnapshotRepository.ALLOWED_RANGES.keys())}"
+            }), 400
+
+        thresh_param = request.args.get("threshold")
+        if thresh_param is not None:
+            try:
+                threshold = float(thresh_param)
+            except (ValueError, TypeError):
+                threshold = float(app.config.get("ELECTRO_LOW_BALANCE_THRESHOLD", 500.0))
+        else:
+            threshold = float(app.config.get("ELECTRO_LOW_BALANCE_THRESHOLD", 500.0))
+
+        meter_id = app.poller.client.meter_id if (app.poller and app.poller.client) else None
+        history = app.repository.get_history(meter_id=meter_id, range_str=range_str)
+        forecast = compute_balance_forecast(history, low_balance_threshold=threshold)
+        forecast["range"] = range_str
+        return jsonify(forecast)
 
     @app.route("/api/export/csv")
     def api_export_csv():

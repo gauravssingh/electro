@@ -81,6 +81,15 @@ class Config:
     ELECTRO_API_TOKEN: Optional[str] = (
         os.getenv("ELECTRO_API_TOKEN", "").strip() or None
     )
+    ELECTRO_NOTIFICATIONS_ENABLED: bool = (
+        os.getenv("ELECTRO_NOTIFICATIONS_ENABLED", "true").lower() in ("true", "1", "yes")
+    )
+    ELECTRO_LOW_BALANCE_THRESHOLD: float = float(
+        os.getenv("ELECTRO_LOW_BALANCE_THRESHOLD", "500.0")
+    )
+    ELECTRO_STALE_ALERT_THRESHOLD_FAILURES: int = int(
+        os.getenv("ELECTRO_STALE_ALERT_THRESHOLD_FAILURES", "3")
+    )
 
     @classmethod
     def get_crypto_keys(cls) -> tuple:
