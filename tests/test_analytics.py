@@ -187,3 +187,58 @@ def test_balance_forecast_already_below_threshold():
     assert res["hours_to_threshold"] == 0.0
     assert res["days_to_threshold"] == 0.0
     assert res["projected_threshold_utc"] == "2026-10-10T05:00:00Z"
+
+
+def test_24h_timeline_bar_continuous_grid():
+    from datetime import datetime, timezone, timedelta
+    from services.analytics import compute_24h_timeline_bar
+
+    now = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
+    points = []
+    # 24 hours of snapshots on Grid (eb_dg_status=0)
+    for m in range(0, 24 * 60 + 1, 10):
+        t = now - timedelta(hours=24) + timedelta(minutes=m)
+        points.append({"observed_at_utc": t.strftime("%Y-%m-%dT%H:%M:%SZ"), "eb_dg_status": 0})
+
+    bar_data = compute_24h_timeline_bar(points, num_buckets=48, now_utc=now)
+    assert bar_data["num_buckets"] == 48
+    assert bar_data["grid_chars"] == 48
+    assert bar_data["dg_chars"] == 0
+    assert bar_data["gap_chars"] == 0
+    assert bar_data["grid_pct"] == 100.0
+    assert bar_data["dg_pct"] == 0.0
+    assert bar_data["ascii_bar"] == "(" + "x" * 48 + ")"
+    assert len(bar_data["intervals"]) == 1
+    assert bar_data["intervals"][0]["source"] == "GRID"
+    assert bar_data["intervals"][0]["pct"] == 100.0
+
+
+def test_24h_timeline_bar_with_dg_outage():
+    from datetime import datetime, timezone, timedelta
+    from services.analytics import compute_24h_timeline_bar
+
+    now = datetime(2026, 10, 12, 12, 0, 0, tzinfo=timezone.utc)
+    points = []
+    # First 18 hours Grid (36 buckets)
+    for m in range(0, 18 * 60, 10):
+        t = now - timedelta(hours=24) + timedelta(minutes=m)
+        points.append({"observed_at_utc": t.strftime("%Y-%m-%dT%H:%M:%SZ"), "eb_dg_status": 0})
+    # 2 hours DG (4 buckets)
+    for m in range(18 * 60, 20 * 60, 10):
+        t = now - timedelta(hours=24) + timedelta(minutes=m)
+        points.append({"observed_at_utc": t.strftime("%Y-%m-%dT%H:%M:%SZ"), "eb_dg_status": 1})
+    # Last 4 hours Grid (8 buckets)
+    for m in range(20 * 60, 24 * 60 + 1, 10):
+        t = now - timedelta(hours=24) + timedelta(minutes=m)
+        points.append({"observed_at_utc": t.strftime("%Y-%m-%dT%H:%M:%SZ"), "eb_dg_status": 0})
+
+    bar_data = compute_24h_timeline_bar(points, num_buckets=48, now_utc=now)
+    assert bar_data["num_buckets"] == 48
+    assert bar_data["grid_chars"] == 44
+    assert bar_data["dg_chars"] == 4
+    assert bar_data["ascii_bar"] == "(" + "x" * 36 + "****" + "x" * 8 + ")"
+    assert len(bar_data["intervals"]) == 3
+    assert bar_data["intervals"][0]["source"] == "GRID"
+    assert bar_data["intervals"][1]["source"] == "DG"
+    assert bar_data["intervals"][2]["source"] == "GRID"
+

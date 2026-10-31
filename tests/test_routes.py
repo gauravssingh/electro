@@ -1,6 +1,7 @@
 """Integration tests for web routes in app.py."""
 
 import json
+from datetime import datetime, timezone, timedelta
 from unittest.mock import MagicMock
 import pytest
 
@@ -161,15 +162,16 @@ def test_api_history_valid_and_invalid(client, app_and_repo):
         "meter_sn": None,
     }
 
+    now = datetime.now(timezone.utc)
     # Point 1: Grid (0)
     p1 = dict(base_snapshot)
-    p1["observed_at_utc"] = "2026-10-10T10:00:00Z"
+    p1["observed_at_utc"] = (now - timedelta(minutes=10)).strftime("%Y-%m-%dT%H:%M:%SZ")
     p1["eb_dg_status"] = 0
     repo.insert_snapshot(p1)
 
     # Point 2: Generator (1)
     p2 = dict(base_snapshot)
-    p2["observed_at_utc"] = "2026-10-10T10:05:00Z"
+    p2["observed_at_utc"] = (now - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
     p2["eb_dg_status"] = 1
     repo.insert_snapshot(p2)
 
@@ -232,8 +234,9 @@ def test_api_health_endpoint(client, app_and_repo):
 
 def test_api_export_csv_success(client, app_and_repo):
     _, repo, _ = app_and_repo
+    now_str = (datetime.now(timezone.utc) - timedelta(minutes=5)).strftime("%Y-%m-%dT%H:%M:%SZ")
     repo.insert_snapshot({
-        "observed_at_utc": "2026-10-10T12:00:00Z",
+        "observed_at_utc": now_str,
         "meter_id": 1042,
         "device_id": "1042",
         "meter_balance": 880.0,
@@ -390,4 +393,32 @@ def test_api_forecast(client, app_and_repo):
     assert data["runway_hours"] == 390.0
     assert data["runway_days"] == 16.2
     assert data["low_balance_threshold"] == 500.0
+
+
+def test_reverse_proxy_headers(client, app_and_repo):
+    """Verify that ProxyFix correctly handles reverse-proxy headers from Cloudflare Tunnel."""
+    res = client.get(
+        "/",
+        headers={
+            "X-Forwarded-Host": "electro.gauravs-apps.in",
+            "X-Forwarded-Proto": "https",
+            "X-Forwarded-For": "203.0.113.195",
+        },
+    )
+    assert res.status_code == 200
+    # In base.html footer: {{ request.host }} should display electro.gauravs-apps.in
+    assert b"electro.gauravs-apps.in" in res.data
+
+
+def test_theme_switcher_elements_rendered(client):
+    """Verify that light mode and theme toggle elements are present in the HTML."""
+    res = client.get("/")
+    assert res.status_code == 200
+    assert b'id="theme-toggle-btn"' in res.data
+    assert b'id="theme-icon-sun"' in res.data
+    assert b'id="theme-icon-moon"' in res.data
+    assert b"electro_theme" in res.data
+    assert b"darkMode: 'class'" in res.data
+
+
 

@@ -15,7 +15,7 @@
         <string>--threads</string>
         <string>4</string>
         <string>--bind</string>
-        <string>127.0.0.1:5000</string>
+        <string>{{BIND_ADDRESS}}</string>
         <string>--timeout</string>
         <string>30</string>
         <string>app:app</string>

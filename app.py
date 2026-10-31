@@ -8,6 +8,7 @@ import hmac
 from datetime import datetime, timezone
 
 from flask import Flask, render_template, jsonify, request, Response
+from werkzeug.middleware.proxy_fix import ProxyFix
 
 from config import Config
 from elnet.client import ELNetClient
@@ -35,6 +36,8 @@ def create_app(
 ) -> Flask:
     """Application factory for Electro."""
     app = Flask(__name__)
+    # Honor reverse-proxy headers (e.g. Cloudflare Tunnel, Tailscale, Nginx)
+    app.wsgi_app = ProxyFix(app.wsgi_app, x_for=1, x_proto=1, x_host=1, x_prefix=1)
 
     # Default configuration
     app.config["ELECTRO_DB_PATH"] = Config.ELECTRO_DB_PATH
@@ -57,7 +60,10 @@ def create_app(
     logger = logging.getLogger("electro.app")
 
     # Initialize repository
-    repo = SnapshotRepository(app.config["ELECTRO_DB_PATH"])
+    repo = SnapshotRepository(
+        app.config["ELECTRO_DB_PATH"],
+        poll_interval_seconds=app.config.get("ELNET_POLL_INTERVAL_SECONDS", 60),
+    )
     repo.init_db()
     app.repository = repo
 
@@ -179,6 +185,13 @@ def create_app(
                 "current_day_dg": latest.get("current_day_dg"),
                 "current_day_solar": latest.get("current_day_solar"),
                 "fixed_charges_today": latest.get("fixed_charges_today"),
+                "total_charges_today": round(
+                    (latest.get("current_day_eb") or 0.0)
+                    + (latest.get("current_day_dg") or 0.0)
+                    + (latest.get("current_day_solar") or 0.0)
+                    + (latest.get("fixed_charges_today") or 0.0),
+                    2,
+                ),
                 "current_month_eb": latest.get("current_month_eb"),
                 "current_month_dg": latest.get("current_month_dg"),
                 "current_month_solar": latest.get("current_month_solar"),
@@ -189,6 +202,10 @@ def create_app(
                 "is_fixed_charge": latest.get("is_fixed_charge"),
                 "is_coil_enable": latest.get("is_coil_enable"),
             }
+
+        prev_day = app.repository.get_previous_day_usage(meter_id=meter_id)
+        if data_clean:
+            data_clean["previous_day"] = prev_day
 
         return jsonify({
             "status": poller_status["status"],
@@ -208,6 +225,7 @@ def create_app(
             "is_collector_owner": poller_status.get("is_collector_owner", False),
             "collector_running": poller_status.get("collector_running", False),
             "data": data_clean,
+            "previous_day": prev_day,
         })
 
     @app.route("/api/history")
@@ -247,12 +265,15 @@ def create_app(
         poll_interval = app.config.get("ELNET_POLL_INTERVAL_SECONDS", 15)
         analytics = compute_source_duration_analytics(points, poll_interval_seconds=poll_interval)
 
+        intervals = app.repository.get_supply_intervals(meter_id=meter_id, range_str=range_str)
+
         return jsonify({
             "range": range_str,
             "count": len(points),
             "points": points,
             "transitions": analytics["transitions"],
             "analytics": analytics,
+            "supply_intervals": intervals,
         })
 
     @app.route("/api/events")

@@ -63,8 +63,8 @@ Gunicorn / Flask Application (app.py)
 
 1. **Unencrypted Upstream HTTP**:
    The upstream ELNet portal operates over plain HTTP (e.g. port 8091). Although the application payload is encrypted using AES-CBC with fixed keys, standard HTTP provides **no authenticated TLS protection**. Do not expose Electro over public networks or forward ports to the internet.
-2. **Local Loopback Isolation**:
-   Electro binds strictly to `127.0.0.1` by default.
+2. **Local Network & Loopback Binding**:
+   Electro binds to `0.0.0.0:5050` by default, making it accessible from other devices across your trusted home Wi-Fi / LAN (e.g. phones, tablets) while avoiding macOS AirPlay Receiver port 5000 conflicts. To restrict strictly to local machine loopback, set `ELECTRO_HOST=127.0.0.1` in `.env`.
 3. **Zero Credential Persistence**:
    Account passwords, encryption parameters, and bearer tokens are never written to SQLite, logs, or frontend payloads.
 4. **Git Protection**:
@@ -118,8 +118,8 @@ ELNET_IVKEY=your_16_character_ivkey
 # Optional Polling & Server Options (15s recommended for source transition detection)
 ELNET_POLL_INTERVAL_SECONDS=15
 ELNET_REQUEST_TIMEOUT_SECONDS=15
-ELECTRO_HOST=127.0.0.1
-ELECTRO_PORT=5000
+ELECTRO_HOST=0.0.0.0
+ELECTRO_PORT=5050
 ELECTRO_DB_PATH=electro.db
 ELECTRO_LOG_LEVEL=INFO
 ```
@@ -157,7 +157,7 @@ To stop and remove the service:
 ```
 
 Open your browser to:
-👉 **[http://127.0.0.1:5000](http://127.0.0.1:5000)**
+👉 **[http://127.0.0.1:5050](http://127.0.0.1:5050)** (or your local LAN IP e.g. `http://<your-mac-ip>:5050` or `http://<hostname>.local:5050`)
 
 ### Option C: Standalone Native CLI (`electro`)
 
@@ -168,7 +168,7 @@ For terminal workflows, LLM agents (Antigravity, Hermes, Claude, MCP), or remote
 cargo install --path cli
 
 # Initialize endpoint and optional access token
-electro init --endpoint http://127.0.0.1:5000 [--token <secret>]
+electro init --endpoint http://127.0.0.1:5050 [--token <secret>]
 
 # Instant status check (Grid vs DG, balance, relay, freshness)
 electro status

@@ -75,8 +75,8 @@ class Config:
 
     _resolve_db_path = resolve_db_path
     ELECTRO_DB_PATH: str = resolve_db_path.__func__()
-    ELECTRO_HOST: str = os.getenv("ELECTRO_HOST", "127.0.0.1")
-    ELECTRO_PORT: int = int(os.getenv("ELECTRO_PORT", "5000"))
+    ELECTRO_HOST: str = os.getenv("ELECTRO_HOST", "0.0.0.0")
+    ELECTRO_PORT: int = int(os.getenv("ELECTRO_PORT", "5050"))
     ELECTRO_LOG_LEVEL: str = os.getenv("ELECTRO_LOG_LEVEL", "INFO").upper()
     ELECTRO_API_TOKEN: Optional[str] = (
         os.getenv("ELECTRO_API_TOKEN", "").strip() or None

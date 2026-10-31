@@ -5,7 +5,7 @@ rather than multiplying snapshot counts by a static interval.
 """
 
 from typing import List, Dict, Any, Optional
-from datetime import datetime, timezone
+from datetime import datetime, timezone, timedelta
 
 from services.normalization import map_power_source
 
@@ -38,7 +38,7 @@ def compute_source_duration_analytics(
     - Coverage is reported as monitored time vs total time span.
     """
     if max_gap_seconds is None:
-        max_gap_seconds = max(poll_interval_seconds * 2.5, 45.0)
+        max_gap_seconds = max(poll_interval_seconds * 3.0, 180.0)
 
     if not points:
         return {
@@ -183,12 +183,200 @@ def compute_source_duration_analytics(
         "poll_interval_seconds": poll_interval_seconds,
         "max_gap_seconds": max_gap_seconds,
         "transitions": transitions,
+        "timeline_24h": compute_24h_timeline_bar(
+            points,
+            num_buckets=48,
+            max_gap_seconds=max_gap_seconds,
+        ),
         "balance_start": balance_start,
         "balance_end": balance_end,
         "balance_change": balance_change,
         "kwh_start": kwh_start,
         "kwh_end": kwh_end,
         "consumption_kwh": consumption_kwh,
+    }
+
+
+def compute_24h_timeline_bar(
+    points: List[Dict[str, Any]],
+    num_buckets: int = 48,
+    now_utc: Optional[datetime] = None,
+    max_gap_seconds: Optional[float] = None,
+) -> Dict[str, Any]:
+    """Compute a discrete (ASCII) and continuous 24-hour running timeline of power sources.
+
+    Rules:
+    - 24-hour rolling window ending at now_utc (or latest snapshot timestamp).
+    - Divides 24h into `num_buckets` (default 48 buckets = 30 mins each).
+    - Characters in ascii_bar:
+        'x' = Grid power active (eb_dg_status == 0)
+        '*' = DG generator active (eb_dg_status == 1)
+        '-' = Unmonitored gap / missing telemetry / pre-startup
+        '?' = Unknown status
+    - DG takes precedence within a bucket if generator ran during that slice.
+    - Also computes contiguous visual intervals for high-resolution progress bar.
+    """
+    if max_gap_seconds is None:
+        max_gap_seconds = 180.0
+
+    valid_points = []
+    for p in points:
+        t = parse_timestamp_utc(p.get("observed_at_utc", ""))
+        if t:
+            valid_points.append({
+                "dt": t,
+                "iso": p.get("observed_at_utc"),
+                "status": p.get("eb_dg_status"),
+            })
+
+    valid_points.sort(key=lambda x: x["dt"])
+
+    if now_utc is None:
+        if valid_points:
+            now_utc = max(datetime.now(timezone.utc), valid_points[-1]["dt"])
+        else:
+            now_utc = datetime.now(timezone.utc)
+
+    window_end = now_utc
+    window_start = window_end - timedelta(hours=24)
+    total_seconds = 86400.0
+    bucket_sec = total_seconds / float(num_buckets)
+
+    # 1. Discrete character buckets
+    bucket_items = []
+    chars = []
+
+    for i in range(num_buckets):
+        b_start = window_start + timedelta(seconds=i * bucket_sec)
+        b_end = window_start + timedelta(seconds=(i + 1) * bucket_sec)
+
+        # Snapshots falling in this bucket window (half-open, inclusive on final bucket)
+        if i == num_buckets - 1:
+            b_pts = [p for p in valid_points if b_start <= p["dt"] <= b_end]
+        else:
+            b_pts = [p for p in valid_points if b_start <= p["dt"] < b_end]
+
+        char = "-"
+        source = "GAP"
+        code = None
+
+        if any(p["status"] == 1 for p in b_pts):
+            char = "*"
+            source = "DG"
+            code = 1
+        elif any(p["status"] == 0 for p in b_pts):
+            char = "x"
+            source = "GRID"
+            code = 0
+        elif any(p["status"] not in (0, 1, None) for p in b_pts):
+            char = "?"
+            source = "UNKNOWN"
+            code = None
+        else:
+            # Check predecessor if no points directly inside bucket
+            prev_pts = [p for p in valid_points if p["dt"] < b_start]
+            if prev_pts:
+                last_p = prev_pts[-1]
+                if (b_start - last_p["dt"]).total_seconds() <= max_gap_seconds:
+                    if last_p["status"] == 1:
+                        char = "*"
+                        source = "DG"
+                        code = 1
+                    elif last_p["status"] == 0:
+                        char = "x"
+                        source = "GRID"
+                        code = 0
+                    else:
+                        char = "?"
+                        source = "UNKNOWN"
+                        code = None
+                else:
+                    char = "-"
+                    source = "GAP"
+                    code = None
+            else:
+                char = "-"
+                source = "GAP"
+                code = None
+
+        chars.append(char)
+        bucket_items.append({
+            "index": i,
+            "char": char,
+            "source": source,
+            "code": code,
+            "start_utc": b_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+            "end_utc": b_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        })
+
+    raw_bar = "".join(chars)
+    ascii_bar = f"({raw_bar})"
+
+    # 2. Contiguous visual intervals
+    intervals = []
+    if bucket_items:
+        curr_int = {
+            "source": bucket_items[0]["source"],
+            "code": bucket_items[0]["code"],
+            "start_utc": bucket_items[0]["start_utc"],
+            "end_utc": bucket_items[0]["end_utc"],
+            "bucket_count": 1,
+        }
+        for b in bucket_items[1:]:
+            if b["source"] == curr_int["source"]:
+                curr_int["end_utc"] = b["end_utc"]
+                curr_int["bucket_count"] += 1
+            else:
+                dur_mins = round(curr_int["bucket_count"] * (bucket_sec / 60.0), 1)
+                pct = round((curr_int["bucket_count"] / float(num_buckets)) * 100.0, 1)
+                curr_int["duration_minutes"] = dur_mins
+                curr_int["pct"] = pct
+                intervals.append(curr_int)
+                curr_int = {
+                    "source": b["source"],
+                    "code": b["code"],
+                    "start_utc": b["start_utc"],
+                    "end_utc": b["end_utc"],
+                    "bucket_count": 1,
+                }
+        dur_mins = round(curr_int["bucket_count"] * (bucket_sec / 60.0), 1)
+        pct = round((curr_int["bucket_count"] / float(num_buckets)) * 100.0, 1)
+        curr_int["duration_minutes"] = dur_mins
+        curr_int["pct"] = pct
+        intervals.append(curr_int)
+
+    grid_chars = sum(1 for c in chars if c == "x")
+    dg_chars = sum(1 for c in chars if c == "*")
+    gap_chars = sum(1 for c in chars if c == "-")
+    unknown_chars = sum(1 for c in chars if c == "?")
+
+    grid_pct = round((grid_chars / float(num_buckets)) * 100.0, 1)
+    dg_pct = round((dg_chars / float(num_buckets)) * 100.0, 1)
+    gap_pct = round((gap_chars / float(num_buckets)) * 100.0, 1)
+
+    grid_hours = round(grid_chars * (24.0 / num_buckets), 1)
+    dg_hours = round(dg_chars * (24.0 / num_buckets), 1)
+    gap_hours = round(gap_chars * (24.0 / num_buckets), 1)
+
+    return {
+        "ascii_bar": ascii_bar,
+        "raw_bar": raw_bar,
+        "num_buckets": num_buckets,
+        "bucket_minutes": round(bucket_sec / 60.0, 1),
+        "window_start_utc": window_start.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "window_end_utc": window_end.strftime("%Y-%m-%dT%H:%M:%SZ"),
+        "grid_chars": grid_chars,
+        "dg_chars": dg_chars,
+        "gap_chars": gap_chars,
+        "unknown_chars": unknown_chars,
+        "grid_pct": grid_pct,
+        "dg_pct": dg_pct,
+        "gap_pct": gap_pct,
+        "grid_hours": grid_hours,
+        "dg_hours": dg_hours,
+        "gap_hours": gap_hours,
+        "intervals": intervals,
+        "buckets": bucket_items,
     }
 
 

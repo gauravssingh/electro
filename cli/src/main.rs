@@ -292,6 +292,17 @@ fn handle_status(client: &ElectroClient, as_json: bool) {
                 if let Some(b) = balance {
                     println!("💰 Meter Balance: ₹{:.2}", b);
                 }
+                let today_spend = snap.as_ref().and_then(|s| s.total_charges_today)
+                    .or_else(|| {
+                        let eb = snap.as_ref().and_then(|s| s.current_day_eb).unwrap_or(0.0);
+                        let dg = snap.as_ref().and_then(|s| s.current_day_dg).unwrap_or(0.0);
+                        if eb > 0.0 || dg > 0.0 { Some(eb + dg) } else { None }
+                    });
+                if let Some(spend) = today_spend {
+                    let eb = snap.as_ref().and_then(|s| s.current_day_eb).unwrap_or(0.0);
+                    let dg = snap.as_ref().and_then(|s| s.current_day_dg).unwrap_or(0.0);
+                    println!("💸 Today Spend:   ₹{:.2} (Grid: ₹{:.2}, DG: ₹{:.2})", spend, eb, dg);
+                }
                 println!("🔌 Relay Status:  {}", relay);
                 println!(
                     "⏱️  Telemetry:     Updated {:.0}s ago (Status: {}, {}s cadence)",

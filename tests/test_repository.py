@@ -258,3 +258,112 @@ def test_get_unified_events(repo):
     timestamps = [e["timestamp"] for e in events]
     assert timestamps == sorted(timestamps, reverse=True)
 
+
+def test_supply_intervals_lifecycle(repo):
+    # Snapshot 1: Genesis interval (Grid, 10.0 kWh)
+    repo.insert_snapshot({
+        "observed_at_utc": "2026-10-10T12:00:00Z",
+        "meter_id": 1042,
+        "eb_dg_status": 0,
+        "kwh_rec_today": 10.0,
+    })
+    # Snapshot 2: Continuous observation 15s later (Grid, 10.05 kWh)
+    repo.insert_snapshot({
+        "observed_at_utc": "2026-10-10T12:00:15Z",
+        "meter_id": 1042,
+        "eb_dg_status": 0,
+        "kwh_rec_today": 10.05,
+    })
+    # Snapshot 3: Continuous observation 30s later (Grid, 10.10 kWh)
+    repo.insert_snapshot({
+        "observed_at_utc": "2026-10-10T12:00:30Z",
+        "meter_id": 1042,
+        "eb_dg_status": 0,
+        "kwh_rec_today": 10.10,
+    })
+
+    intervals = repo.get_supply_intervals(meter_id=1042, range_str="all")
+    assert len(intervals) == 1
+    assert intervals[0]["source"] == "GRID"
+    assert intervals[0]["duration_seconds"] == 30.0
+    assert intervals[0]["start_kwh"] == 10.0
+    assert intervals[0]["end_kwh"] == 10.10
+    assert intervals[0]["kwh_consumed"] == pytest.approx(0.10)
+    assert intervals[0]["is_active"] is True
+
+    # Snapshot 4: Telemetry gap of 15 minutes followed by DG generator power
+    repo.insert_snapshot({
+        "observed_at_utc": "2026-10-10T12:15:30Z",
+        "meter_id": 1042,
+        "eb_dg_status": 1,
+        "kwh_rec_today": 10.10,
+    })
+
+    intervals = repo.get_supply_intervals(meter_id=1042, range_str="all")
+    assert len(intervals) == 3
+    # 1. Closed Grid interval
+    assert intervals[0]["source"] == "GRID"
+    assert intervals[0]["is_active"] is False
+    # 2. GAP interval
+    assert intervals[1]["source"] == "GAP"
+    assert intervals[1]["duration_seconds"] == 900.0
+    assert intervals[1]["is_active"] is False
+    # 3. Active DG interval
+    assert intervals[2]["source"] == "DG"
+    assert intervals[2]["is_active"] is True
+
+
+def test_rebuild_supply_intervals_and_events(repo):
+    # Populate snapshots and poll events
+    repo.insert_snapshot({
+        "observed_at_utc": "2026-10-10T10:00:00Z",
+        "meter_id": 1042,
+        "eb_dg_status": 0,
+        "relay_status": "ON",
+        "meter_balance": 1000.0,
+        "kwh_rec_today": 5.0,
+    })
+    repo.insert_snapshot({
+        "observed_at_utc": "2026-10-10T10:00:15Z",
+        "meter_id": 1042,
+        "eb_dg_status": 1,
+        "relay_status": "ON",
+        "meter_balance": 980.0,
+        "kwh_rec_today": 5.05,
+    })
+    repo.record_poll_event("2026-10-10T10:00:00Z", success=True, duration_ms=200, meter_id=1042)
+    repo.record_poll_event("2026-10-10T10:00:15Z", success=False, duration_ms=5000, error_category="timeout", meter_id=1042)
+    repo.record_poll_event("2026-10-10T10:00:30Z", success=True, duration_ms=250, meter_id=1042)
+
+    # Rebuild from scratch
+    stats = repo.rebuild_supply_intervals_and_events(meter_id=1042)
+    assert stats["supply_intervals"] >= 2
+    assert stats["events"] >= 3
+
+    # Idempotence check: Rebuilding again produces identical results
+    stats_second = repo.rebuild_supply_intervals_and_events(meter_id=1042)
+    assert stats_second == stats
+
+
+def test_get_previous_day_usage(repo):
+    # Snapshot Day 1 (2026-10-10)
+    repo.insert_snapshot({
+        "observed_at_utc": "2026-10-10T12:00:00Z",
+        "meter_id": 1042,
+        "kwh_rec_today": 8.5,
+        "current_day_eb": 70.0,
+    })
+    # Snapshot Day 2 (2026-10-11)
+    repo.insert_snapshot({
+        "observed_at_utc": "2026-10-11T12:00:00Z",
+        "meter_id": 1042,
+        "kwh_rec_today": 1.2,
+        "current_day_eb": 10.0,
+    })
+
+    prev = repo.get_previous_day_usage(meter_id=1042)
+    assert prev is not None
+    assert prev["date"] == "2026-10-10"
+    assert prev["kwh"] == 8.5
+    assert prev["spend"] == 70.0
+

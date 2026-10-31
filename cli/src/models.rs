@@ -28,6 +28,7 @@ pub struct SnapshotData {
     pub current_month_eb: Option<f64>,
     pub current_month_dg: Option<f64>,
     pub fixed_charges_today: Option<f64>,
+    pub total_charges_today: Option<f64>,
     pub is_eb: Option<bool>,
     pub is_dg: Option<bool>,
 }
@@ -80,6 +81,22 @@ pub struct AnalyticsData {
     pub kwh_start: Option<f64>,
     pub kwh_end: Option<f64>,
     pub consumption_kwh: Option<f64>,
+    pub timeline_24h: Option<Timeline24hData>,
+}
+
+#[derive(Debug, Serialize, Deserialize)]
+pub struct Timeline24hData {
+    pub ascii_bar: Option<String>,
+    pub raw_bar: Option<String>,
+    pub num_buckets: Option<usize>,
+    pub grid_chars: Option<usize>,
+    pub dg_chars: Option<usize>,
+    pub gap_chars: Option<usize>,
+    pub grid_pct: Option<f64>,
+    pub dg_pct: Option<f64>,
+    pub gap_pct: Option<f64>,
+    pub grid_hours: Option<f64>,
+    pub dg_hours: Option<f64>,
 }
 
 #[derive(Debug, Serialize, Deserialize)]

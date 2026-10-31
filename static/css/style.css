@@ -1,13 +1,352 @@
-/* Custom enhancements on top of Tailwind */
-body {
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+/* ==========================================================================
+   Electro Modern Minimal Design System (Light & Dark Support)
+   ========================================================================== */
+
+@import url('https://fonts.googleapis.com/css2?family=Plus+Jakarta+Sans:wght@400;500;600;700;800&family=JetBrains+Mono:wght@400;500;600&display=swap');
+
+:root {
+  --font-sans: 'Plus Jakarta Sans', -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-mono: 'JetBrains Mono', ui-monospace, SFMono-Regular, Menlo, Monaco, monospace;
+
+  /* Light Theme Palette Tokens (Default) */
+  --bg-app: #f8fafc;
+  --text-main: #0f172a;
+  --text-muted: #64748b;
+  --text-dim: #94a3b8;
+
+  --card-bg: rgba(255, 255, 255, 0.92);
+  --card-border: rgba(226, 232, 240, 0.9);
+  --card-shadow: 0 1px 3px 0 rgba(0, 0, 0, 0.05), 0 1px 2px -1px rgba(0, 0, 0, 0.05);
+  --card-hover-bg: #ffffff;
+  --card-hover-border: rgba(203, 213, 225, 0.95);
+
+  --panel-bg: rgba(255, 255, 255, 0.95);
+  --panel-border: rgba(226, 232, 240, 0.9);
+
+  --scrollbar-track: rgba(241, 245, 249, 0.85);
+  --scrollbar-thumb: rgba(148, 163, 184, 0.5);
+  --scrollbar-thumb-hover: rgba(100, 116, 139, 0.7);
 }
 
+html.dark {
+  /* Dark Theme Palette Tokens */
+  --bg-app: #090d16;
+  --text-main: #f1f5f9;
+  --text-muted: #94a3b8;
+  --text-dim: #64748b;
+
+  --card-bg: rgba(15, 23, 42, 0.55);
+  --card-border: rgba(255, 255, 255, 0.06);
+  --card-shadow: inset 0 1px 0 0 rgba(255, 255, 255, 0.04);
+  --card-hover-bg: rgba(15, 23, 42, 0.75);
+  --card-hover-border: rgba(255, 255, 255, 0.12);
+
+  --panel-bg: rgba(15, 23, 42, 0.65);
+  --panel-border: rgba(255, 255, 255, 0.07);
+
+  --scrollbar-track: rgba(15, 23, 42, 0.6);
+  --scrollbar-thumb: rgba(51, 65, 85, 0.6);
+  --scrollbar-thumb-hover: rgba(71, 85, 105, 0.8);
+}
+
+body {
+  font-family: var(--font-sans);
+  -webkit-font-smoothing: antialiased;
+  -moz-osx-font-smoothing: grayscale;
+  background-color: var(--bg-app);
+  color: var(--text-main);
+  transition: background-color 0.2s ease, color 0.2s ease;
+}
+
+.font-mono, code, kbd {
+  font-family: var(--font-mono);
+}
+
+/* Numeric alignment */
+.tabular-nums {
+  font-variant-numeric: tabular-nums;
+}
+
+/* Custom Scrollbars */
+::-webkit-scrollbar {
+  width: 6px;
+  height: 6px;
+}
+::-webkit-scrollbar-track {
+  background: var(--scrollbar-track);
+}
+::-webkit-scrollbar-thumb {
+  background: var(--scrollbar-thumb);
+  border-radius: 9999px;
+}
+::-webkit-scrollbar-thumb:hover {
+  background: var(--scrollbar-thumb-hover);
+}
+
+/* Glassmorphism & Surface Cards */
+.glass-panel {
+  background: var(--panel-bg);
+  backdrop-filter: blur(16px);
+  -webkit-backdrop-filter: blur(16px);
+  border: 1px solid var(--panel-border);
+  transition: background 0.2s ease, border-color 0.2s ease;
+}
+
+.glass-panel-elevated {
+  background: var(--panel-bg);
+  backdrop-filter: blur(20px);
+  -webkit-backdrop-filter: blur(20px);
+  border: 1px solid var(--panel-border);
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.08);
+}
+
+html.dark .glass-panel-elevated {
+  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.3), inset 0 1px 0 0 rgba(255, 255, 255, 0.05);
+}
+
+.metric-card {
+  background: var(--card-bg);
+  backdrop-filter: blur(12px);
+  -webkit-backdrop-filter: blur(12px);
+  border: 1px solid var(--card-border);
+  border-radius: 1rem;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  box-shadow: var(--card-shadow);
+}
+
+.metric-card:hover {
+  background: var(--card-hover-bg);
+  border-color: var(--card-hover-border);
+  transform: translateY(-1px);
+}
+
+/* Glowing Beacons & Pulses */
+.beacon-dot-emerald {
+  box-shadow: 0 0 8px rgba(16, 185, 129, 0.6), 0 0 18px rgba(16, 185, 129, 0.3);
+}
+
+.beacon-dot-amber {
+  box-shadow: 0 0 8px rgba(245, 158, 11, 0.6), 0 0 18px rgba(245, 158, 11, 0.3);
+}
+
+.beacon-dot-rose {
+  box-shadow: 0 0 8px rgba(244, 63, 94, 0.6), 0 0 18px rgba(244, 63, 94, 0.3);
+}
+
+/* Soft Breathing Animation for Live Telemetry Beacon */
+@keyframes beaconPulse {
+  0%, 100% {
+    transform: scale(1);
+    opacity: 1;
+  }
+  50% {
+    transform: scale(1.15);
+    opacity: 0.75;
+  }
+}
+
+.animate-beacon {
+  animation: beaconPulse 2.5s infinite ease-in-out;
+}
+
+/* Segmented Control Buttons */
+.tab-btn {
+  font-family: var(--font-sans);
+  position: relative;
+  user-select: none;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+  outline: none;
+}
+
+.tab-btn:hover {
+  transform: translateY(-0.5px);
+}
+
+.tab-btn:active {
+  transform: scale(0.96);
+}
+
+.tab-btn svg {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.tab-btn:hover svg {
+  transform: scale(1.1);
+}
+
+.tab-btn.active svg {
+  transform: scale(1.08);
+}
+
+.tab-btn kbd {
+  transition: background-color 0.2s ease, border-color 0.2s ease, color 0.2s ease;
+}
+
+.tab-btn.active {
+  background: #ffffff;
+  color: #0f172a;
+  border-color: rgba(203, 213, 225, 0.9);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.08);
+}
+
+html.dark .tab-btn.active {
+  background: rgba(30, 41, 59, 0.9);
+  color: #ffffff;
+  border-color: rgba(255, 255, 255, 0.12);
+  box-shadow: 0 1px 3px rgba(0, 0, 0, 0.25);
+}
+
+/* ==========================================================================
+   Navigation Action Transitions & View Animations
+   ========================================================================== */
+
+/* Smooth View Transitions */
+.view-panel {
+  will-change: opacity, transform;
+}
+
+.panel-transition-in {
+  animation: panelFadeSlideIn 0.24s cubic-bezier(0.16, 1, 0.3, 1) both;
+}
+
+@keyframes panelFadeSlideIn {
+  0% {
+    opacity: 0;
+    transform: translateY(8px);
+  }
+  100% {
+    opacity: 1;
+    transform: translateY(0);
+  }
+}
+
+/* Range & Event Filter Action Buttons */
+.range-btn {
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+}
+
+.range-btn:active {
+  transform: scale(0.95);
+}
+
+.event-filter-btn {
+  transition: all 0.18s cubic-bezier(0.16, 1, 0.3, 1);
+  user-select: none;
+}
+
+.event-filter-btn:active {
+  transform: scale(0.95);
+}
+
+/* Header utility buttons */
+#refresh-btn,
+#theme-toggle-btn {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+#refresh-btn:hover,
+#theme-toggle-btn:hover {
+  transform: translateY(-0.5px);
+}
+
+#refresh-btn:active,
+#theme-toggle-btn:active {
+  transform: scale(0.93);
+}
+
+#theme-toggle-btn svg {
+  transition: transform 0.3s cubic-bezier(0.34, 1.56, 0.64, 1);
+}
+
+#theme-toggle-btn:hover svg {
+  transform: rotate(20deg) scale(1.1);
+}
+
+/* View In Analytics Quick Link Transition */
+#events-view-analytics {
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+#events-view-analytics:hover {
+  transform: translateX(2px);
+}
+
+/* Configured Flag badges */
 .flag-badge-enabled {
-  color: #34d399; /* emerald-400 */
+  color: #059669;
+}
+html.dark .flag-badge-enabled {
+  color: #34d399;
 }
 
 .flag-badge-disabled {
-  color: #64748b; /* slate-500 */
+  color: #94a3b8;
+}
+html.dark .flag-badge-disabled {
+  color: #64748b;
+}
+
+/* ==========================================================================
+   Mobile-Friendly UX & Touch Utilities
+   ========================================================================== */
+
+/* Mobile Safe Area Padding */
+.pb-safe {
+  padding-bottom: max(0.5rem, env(safe-area-inset-bottom, 0px));
+}
+
+.pt-safe {
+  padding-top: max(0.25rem, env(safe-area-inset-top, 0px));
+}
+
+/* Touch Friendly Interactions */
+* {
+  -webkit-tap-highlight-color: transparent;
+}
+
+/* Smooth momentum touch scrolling for tables and charts */
+.overflow-x-auto,
+.touch-scroll {
+  -webkit-overflow-scrolling: touch;
+}
+
+/* Minimum 44px touch target on mobile */
+.mobile-tab-btn {
+  min-height: 44px;
+  touch-action: manipulation;
+  user-select: none;
+  transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.mobile-tab-btn:active {
+  transform: scale(0.92);
+}
+
+.mobile-tab-btn svg {
+  transition: transform 0.2s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+.mobile-tab-btn.active svg,
+.mobile-tab-btn[data-active="true"] svg {
+  transform: scale(1.15);
+}
+
+/* Accessibility: Respect Reduced Motion Preferences */
+@media (prefers-reduced-motion: reduce) {
+  .panel-transition-in {
+    animation: none !important;
+  }
+  .tab-btn,
+  .mobile-tab-btn,
+  .range-btn,
+  .event-filter-btn,
+  #refresh-btn,
+  #theme-toggle-btn,
+  #events-view-analytics,
+  .metric-card,
+  body {
+    transition: none !important;
+    transform: none !important;
+  }
 }

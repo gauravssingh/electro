@@ -4,6 +4,7 @@ from typing import Optional, List, Dict, Any
 from datetime import datetime, timezone, timedelta
 
 from storage.db import get_db_connection, run_migrations
+from services.state_machine import process_snapshot_transition
 
 
 class SnapshotRepository:
@@ -16,12 +17,22 @@ class SnapshotRepository:
         "all": None,
     }
 
-    def __init__(self, db_path: str):
+    def __init__(self, db_path: str, poll_interval_seconds: int = 60):
         self.db_path = db_path
+        self.poll_interval_seconds = poll_interval_seconds
 
     def init_db(self) -> None:
         """Run database migrations and initialize schema."""
         run_migrations(self.db_path)
+        # Bootstrap derived supply intervals & events if table is empty but snapshots exist
+        try:
+            with get_db_connection(self.db_path) as conn:
+                c_int = conn.execute("SELECT COUNT(*) AS cnt FROM supply_intervals;").fetchone()["cnt"]
+                c_snap = conn.execute("SELECT COUNT(*) AS cnt FROM snapshots;").fetchone()["cnt"]
+                if c_int == 0 and c_snap > 0:
+                    self.rebuild_supply_intervals_and_events()
+        except Exception:
+            pass
 
     def insert_snapshot(self, snapshot: Dict[str, Any]) -> int:
         """Insert a normalized snapshot and return its generated ID.
@@ -83,8 +94,38 @@ class SnapshotRepository:
             params.setdefault(col, None)
 
         with get_db_connection(self.db_path) as conn:
+            # Query immediate predecessor before insert
+            clean_m_id = None
+            if params.get("meter_id") is not None:
+                try:
+                    clean_m_id = int(params["meter_id"])
+                except (ValueError, TypeError):
+                    pass
+
+            prev_row = None
+            if clean_m_id is not None:
+                prev_row = conn.execute(
+                    "SELECT * FROM snapshots WHERE meter_id = ? ORDER BY id DESC LIMIT 1;",
+                    (clean_m_id,),
+                ).fetchone()
+            prev_snap = dict(prev_row) if prev_row else None
+
             cursor = conn.execute(sql, params)
-            return cursor.lastrowid
+            snap_id = cursor.lastrowid
+            params["id"] = snap_id
+
+            # Synchronously update supply intervals and record operational events
+            try:
+                process_snapshot_transition(
+                    conn,
+                    params,
+                    prev_snapshot=prev_snap,
+                    poll_interval_seconds=getattr(self, "poll_interval_seconds", 60),
+                )
+            except Exception as sm_err:
+                pass
+
+            return snap_id
 
     def get_latest_snapshot(self, meter_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
         """Retrieve the most recent snapshot."""
@@ -134,6 +175,168 @@ class SnapshotRepository:
         with get_db_connection(self.db_path) as conn:
             rows = conn.execute(sql, params).fetchall()
             return [self._row_to_dict(r) for r in rows]
+
+    def get_supply_intervals(
+        self,
+        meter_id: Optional[int] = None,
+        range_str: str = "24h",
+    ) -> List[Dict[str, Any]]:
+        """Retrieve continuous power supply intervals within the specified time range."""
+        if range_str not in self.ALLOWED_RANGES:
+            raise ValueError(f"Invalid range '{range_str}'. Allowed values: {', '.join(self.ALLOWED_RANGES.keys())}")
+
+        delta = self.ALLOWED_RANGES[range_str]
+        params: List[Any] = []
+        sql = "SELECT * FROM supply_intervals WHERE 1=1"
+
+        if delta is not None:
+            cutoff = (datetime.now(timezone.utc) - delta).strftime("%Y-%m-%dT%H:%M:%SZ")
+            sql += " AND (ended_at_utc >= ? OR is_active = 1)"
+            params.append(cutoff)
+
+        if meter_id is not None:
+            try:
+                params.append(int(meter_id))
+                sql += " AND meter_id = ?"
+            except (ValueError, TypeError):
+                pass
+
+        sql += " ORDER BY started_at_utc ASC, id ASC;"
+
+        with get_db_connection(self.db_path) as conn:
+            try:
+                rows = conn.execute(sql, params).fetchall()
+                results = []
+                for r in rows:
+                    item = dict(r)
+                    item["is_active"] = bool(item.get("is_active"))
+                    results.append(item)
+                return results
+            except Exception:
+                return []
+
+    def get_previous_day_usage(self, meter_id: Optional[int] = None) -> Optional[Dict[str, Any]]:
+        """Retrieve total energy and spend for the previous calendar day (in IST)."""
+        sql = """
+            SELECT
+                date(datetime(observed_at_utc, '+330 minutes')) as day_date,
+                MAX(kwh_rec_today) as day_kwh,
+                MAX(COALESCE(current_day_eb, 0) + COALESCE(current_day_dg, 0) + COALESCE(current_day_solar, 0) + COALESCE(fixed_charges_today, 0)) as day_spend
+            FROM snapshots
+            WHERE date(datetime(observed_at_utc, '+330 minutes')) < (
+                SELECT date(datetime(observed_at_utc, '+330 minutes'))
+                FROM snapshots
+                WHERE (:meter_id IS NULL OR meter_id = :meter_id)
+                ORDER BY id DESC LIMIT 1
+            )
+            AND (:meter_id IS NULL OR meter_id = :meter_id)
+            GROUP BY day_date
+            ORDER BY day_date DESC
+            LIMIT 1;
+        """
+        params = {"meter_id": int(meter_id) if meter_id is not None else None}
+        with get_db_connection(self.db_path) as conn:
+            try:
+                row = conn.execute(sql, params).fetchone()
+                if not row or row["day_kwh"] is None:
+                    return None
+                return {
+                    "date": row["day_date"],
+                    "kwh": round(float(row["day_kwh"]), 2),
+                    "spend": round(float(row["day_spend"]), 2) if row["day_spend"] is not None else 0.0,
+                }
+            except Exception:
+                return None
+
+    def rebuild_supply_intervals_and_events(self, meter_id: Optional[int] = None) -> Dict[str, int]:
+        """Rebuild supply intervals and operational events from raw snapshots and poll_events.
+
+        Executes an atomic single-transaction replay.
+        """
+        with get_db_connection(self.db_path) as conn:
+            # 1. Clear existing intervals and events
+            if meter_id is not None:
+                m_clean = int(meter_id)
+                conn.execute("DELETE FROM supply_intervals WHERE meter_id = ?;", (m_clean,))
+                conn.execute("DELETE FROM events WHERE meter_id = ?;", (m_clean,))
+                snap_sql = "SELECT * FROM snapshots WHERE meter_id = ? ORDER BY id ASC;"
+                snap_rows = conn.execute(snap_sql, (m_clean,)).fetchall()
+                poll_sql = "SELECT * FROM poll_events WHERE meter_id = ? ORDER BY id ASC;"
+                poll_rows = conn.execute(poll_sql, (m_clean,)).fetchall()
+            else:
+                conn.execute("DELETE FROM supply_intervals;")
+                conn.execute("DELETE FROM events;")
+                snap_sql = "SELECT * FROM snapshots ORDER BY id ASC;"
+                snap_rows = conn.execute(snap_sql).fetchall()
+                poll_sql = "SELECT * FROM poll_events ORDER BY id ASC;"
+                poll_rows = conn.execute(poll_sql).fetchall()
+
+            # 2. Sequential replay of snapshots per meter
+            snaps_by_meter: Dict[int, List[Dict[str, Any]]] = {}
+            for r in snap_rows:
+                s = dict(r)
+                m = s.get("meter_id") or 0
+                snaps_by_meter.setdefault(m, []).append(s)
+
+            for m, m_snaps in snaps_by_meter.items():
+                prev = None
+                for s in m_snaps:
+                    process_snapshot_transition(
+                        conn,
+                        s,
+                        prev_snapshot=prev,
+                        poll_interval_seconds=getattr(self, "poll_interval_seconds", 60),
+                    )
+                    prev = s
+
+            # 3. Replay poll events for connection drop / recovery
+            prev_poll = None
+            in_failure_streak = False
+            for p in poll_rows:
+                succ = bool(p["success"])
+                ts = p["attempted_at_utc"]
+                p_id = p["id"]
+                p_meter_id = p["meter_id"]
+                err_msg = p["error_message"] or "Unable to reach meter telemetry."
+                err_cat = p["error_category"] or "network_error"
+
+                if prev_poll is not None:
+                    if prev_poll["success"] == 1 and not succ:
+                        in_failure_streak = True
+                        conn.execute(
+                            """
+                            INSERT INTO events (
+                                meter_id, event_type, category, severity, occurred_at_utc,
+                                title, details, poll_event_id, created_at_utc
+                            ) VALUES (?, 'connection_drop', 'Network', 'warning', ?, 'Connection Dropped', ?, ?, datetime('now'));
+                            """,
+                            (
+                                p_meter_id,
+                                ts,
+                                f"Upstream poll failed: {err_msg} ({err_cat}).",
+                                p_id,
+                            ),
+                        )
+                    elif prev_poll["success"] == 0 and succ and in_failure_streak:
+                        in_failure_streak = False
+                        conn.execute(
+                            """
+                            INSERT INTO events (
+                                meter_id, event_type, category, severity, occurred_at_utc,
+                                title, details, poll_event_id, created_at_utc
+                            ) VALUES (?, 'connection_recovery', 'Network', 'info', ?, 'Connection Restored', 'Telemetry communication restored successfully.', ?, datetime('now'));
+                            """,
+                            (
+                                p_meter_id,
+                                ts,
+                                p_id,
+                            ),
+                        )
+                prev_poll = p
+
+            c_intervals = conn.execute("SELECT COUNT(*) AS cnt FROM supply_intervals;").fetchone()["cnt"]
+            c_events = conn.execute("SELECT COUNT(*) AS cnt FROM events;").fetchone()["cnt"]
+            return {"supply_intervals": c_intervals, "events": c_events}
 
     def export_snapshots_csv(
         self,
@@ -248,8 +451,56 @@ class SnapshotRepository:
             clean_meter_id,
         )
         with get_db_connection(self.db_path) as conn:
+            # Query last poll event to detect connection drops and recoveries
+            prev_poll = None
+            if clean_meter_id is not None:
+                prev_poll = conn.execute(
+                    "SELECT * FROM poll_events WHERE meter_id = ? ORDER BY id DESC LIMIT 1;",
+                    (clean_meter_id,),
+                ).fetchone()
+            else:
+                prev_poll = conn.execute(
+                    "SELECT * FROM poll_events ORDER BY id DESC LIMIT 1;"
+                ).fetchone()
+
             cursor = conn.execute(sql, params)
-            return cursor.lastrowid
+            poll_id = cursor.lastrowid
+
+            if prev_poll is not None:
+                try:
+                    if prev_poll["success"] == 1 and not success:
+                        conn.execute(
+                            """
+                            INSERT INTO events (
+                                meter_id, event_type, category, severity, occurred_at_utc,
+                                title, details, poll_event_id, created_at_utc
+                            ) VALUES (?, 'connection_drop', 'Network', 'warning', ?, 'Connection Dropped', ?, ?, datetime('now'));
+                            """,
+                            (
+                                clean_meter_id,
+                                attempted_at_utc,
+                                f"Upstream poll failed: {error_message or error_category or 'Connection error'}.",
+                                poll_id,
+                            ),
+                        )
+                    elif prev_poll["success"] == 0 and success:
+                        conn.execute(
+                            """
+                            INSERT INTO events (
+                                meter_id, event_type, category, severity, occurred_at_utc,
+                                title, details, poll_event_id, created_at_utc
+                            ) VALUES (?, 'connection_recovery', 'Network', 'info', ?, 'Connection Restored', 'Telemetry communication restored successfully.', ?, datetime('now'));
+                            """,
+                            (
+                                clean_meter_id,
+                                attempted_at_utc,
+                                poll_id,
+                            ),
+                        )
+                except Exception:
+                    pass
+
+            return poll_id
 
     def get_recent_poll_events(self, limit: int = 20) -> List[Dict[str, Any]]:
         """Retrieve recent poll attempts (successes and failures)."""
@@ -271,6 +522,41 @@ class SnapshotRepository:
         - Upstream connection drops and recoveries
         - Prepaid balance recharges and low-balance warnings
         """
+        # 1. Query pre-computed events table directly
+        try:
+            with get_db_connection(self.db_path) as conn:
+                evt_sql = "SELECT * FROM events WHERE 1=1"
+                evt_params: List[Any] = []
+                if meter_id is not None:
+                    try:
+                        evt_params.append(int(meter_id))
+                        evt_sql += " AND (meter_id = ? OR meter_id IS NULL)"
+                    except (ValueError, TypeError):
+                        pass
+                evt_sql += " ORDER BY occurred_at_utc DESC, id DESC LIMIT ?;"
+                evt_params.append(limit)
+
+                rows = conn.execute(evt_sql, evt_params).fetchall()
+                if rows:
+                    res = []
+                    for r in rows:
+                        res.append({
+                            "id": f"evt-{r['id']}",
+                            "timestamp": r["occurred_at_utc"],
+                            "type": r["event_type"],
+                            "category": r["category"],
+                            "title": r["title"],
+                            "details": r["details"],
+                            "severity": r["severity"],
+                            "meter_id": r["meter_id"],
+                            "previous_value": r["previous_value"],
+                            "current_value": r["current_value"],
+                        })
+                    return res
+        except Exception:
+            pass
+
+        # 2. Fallback to legacy in-memory scan (if events table is unmigrated or empty)
         events: List[Dict[str, Any]] = []
 
         with get_db_connection(self.db_path) as conn:
